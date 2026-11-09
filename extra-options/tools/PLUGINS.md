@@ -2,8 +2,10 @@
 
 Place 64-bit Windows DLLs directly in:
 
-- Azimuth: `mods/<mod name>/plugins` beside that mod's media/database files.
-- Mezcal: `Mount/mods/<mod name>/plugins`.
+- Azimuth: `mods/<game>/<mod name>/plugins` beside that mod's media/database files.
+- Mezcal: `Mount/mods/Forza Horizon 2/<mod name>/plugins`.
+
+`<game>` is `Forza Horizon 2` or `Forza Motorsport 5`, matching the plugin's target.
 
 No manifest, addon database, import library or hooking framework is required.
 The plugin loader is available whenever Extra Options is enabled, independently
@@ -74,4 +76,4 @@ appropriate plugins folder. Its initialization message appears in the mod log.
 Optional in EO0.2.212: FH2PluginMediaDirectory returns an existing private asset
 directory below the plugin folder after initialization. These assets supplement
 the active mod's media tree through native I/O; normal mod media takes priority.
-See [PLUGIN_API.md](PLUGIN_API.md) and `fh2_plugin.h` for the ABI contract.
+See [PLUGIN_API.md](PLUGIN_API.md) and `fh2/fh2_plugin.h` for the ABI contract.

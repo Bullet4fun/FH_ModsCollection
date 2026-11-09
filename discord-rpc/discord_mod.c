@@ -1,4 +1,4 @@
-/* Discord Rich Presence mod (mods\FH2_DiscordRPC.dll): "Playing <the game>" (any of Azimuth's games) with
+/* Discord Rich Presence mod (mods\FH_DiscordRPC.dll): "Playing <the game>" (any of Azimuth's games) with
    the elapsed time while the game runs. No settings; remove the DLL to turn it off. */
 #include "azimuth_mod.h"
 #include "discord_rpc.h"
@@ -38,7 +38,7 @@ __declspec(dllexport) int AzimuthModLoad(const AzimuthModHost *host) {
     static wchar_t log_path[PATH_CAPACITY];
     if (path_join(log_path, host->mods_dir, L"AzimuthModLoader.log")) {
         mod_log_open(log_path, 0, "DiscordRPC");
-        log_append("FH2 Discord RPC " DISCORD_VERSION " by Bullet4fun: https://github.com/Bullet4fun/FH2_ModsCollection\r\n");
+        log_append("FH Discord RPC " DISCORD_VERSION " by Bullet4fun: https://github.com/Bullet4fun/FH_ModsCollection\r\n");
         mod_log_open(L"", 0, "DiscordRPC");
     }
     for (unsigned i = 0; i < ARRAY_COUNT(apps); ++i) {

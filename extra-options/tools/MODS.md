@@ -1,4 +1,4 @@
-# Addon loader — 0.3.0
+# Addon loader — 0.3.1
 
 Native asynchronous opens are supported for generated carbins and loose media
 assets, including model files. Their original virtual filenames are retained;
@@ -32,7 +32,7 @@ See `MOD_DIFF.md` for output naming and advanced commands.
 
 ## Installation and layout
 
-Azimuth v1.0.1: put `winmm.dll` and `mods/` beside **Azimuth.exe**, not inside
+Azimuth: put `winmm.dll` and `mods/` beside **Azimuth.exe**, not inside
 `data/bin` or the selected game folder. The selected game folder can be anywhere.
 Mezcal: put `mods/` in **Mount**, beside the game EXE and `xg.dll`.
 Keep your existing config file and settings DAT. No new config file switch is required.
@@ -43,29 +43,39 @@ Azimuth/
   Azimuth.exe
   winmm.dll
   mods/
-    loadorder.txt
-    my-car/
-      mod.json          optional manifest
-      database.json       optional; exporter format 1 or 2
-      strings.json        optional; localized string additions/overrides
-      media/
-        cars/             game-relative assets
-        stripped/RC0/
-          Thumbnail_2546_Big.swatchbin
-          Thumbnail_2546_Small.swatchbin
+    Cache/                loader-owned caches for both games
+    Forza Motorsport 5/
+      loadorder.txt       FM5 packages and order live here
+    Forza Horizon 2/
+      loadorder.txt
+      my-car/
+        mod.json          optional manifest
+        database.json     optional; exporter format 1 or 2
+        strings.json      optional; localized string additions/overrides
+        media/
+          cars/           game-relative assets
+          stripped/RC0/
+            Thumbnail_2546_Big.swatchbin
+            Thumbnail_2546_Small.swatchbin
 ```
 
-The same `mods` structure goes in `Mount/mods` for Mezcal. New mod folders are
+The same FH2 structure goes in `Mount/mods/Forza Horizon 2` for Mezcal. New mod folders are
 appended to `loadorder.txt` automatically. Restart after changing mods or order.
 A mod may contain only `media/`; neither a database nor a manifest is required.
 Cars are defined by their database JSON, with no extra car list in `mod.json`.
+
+When `mods/loadorder.txt` exists, the loader moves legacy FH2 mod directories
+into `mods/Forza Horizon 2` before loading them. Game folders and `Cache` stay
+at the root. If a mod folder already exists in the new location, the loader
+uses that copy and leaves the legacy copy alone.
+See [Mods and caching](Mods-and-Caching.md) for migration details.
 
 ## Load order
 
 Use UTF-8 text, one folder name per line. Blank lines and lines beginning with
 `#` are ignored. To disable a discovered folder, comment out its exact name:
 `# my-car`. Such folders are not automatically re-enabled. Folder names may contain spaces and Unicode; paths outside
-`mods` are rejected. Example:
+the selected game's mod folder are rejected. Example:
 
 ```text
 # First loaded, lowest addon priority
@@ -301,7 +311,7 @@ for data only. A missing explicitly named database rejects the addon. Duplicate
 manifest IDs reject the later addon. Omitted optional media folders are harmless.
 
 Limits: 128 addons, 64 KiB load-order text, 16 MiB per JSON document, 64 MiB total
-input text, JSON nesting 64 levels and 262,144 values per document. The loader targets the supported game build and Azimuth v1.0.1; all existing
+input text, JSON nesting 64 levels and 262,144 values per document. The loader targets the supported game build and Azimuth v1.0.1/v1.0.2; all existing
 executable/version guards remain active. See `VALIDATION.md` for what was tested.
 
 ## Localized strings
@@ -401,3 +411,29 @@ Older top-level `id_conflicts` remains accepted for compatibility. If both locat
 are supplied, their values must agree. New exports use only `policy.id_conflicts`.
 The batch workflow prompts for both runtime conflict policies; export-only choices
 (changed/deleted rows) determine which operations are written, not runtime policy.
+
+
+## Shared database IDs (Extra Options 0.3.11+)
+
+Use `"policy": {"id_conflicts": "last_wins"}` to share inserted row identities
+instead of assigning new IDs. This applies to all database tables, including
+engines, wheels, parts and cars. Distinct car IDs remain separate; two cars can
+reference one shared engine ID. The latest successful mod in loadorder.txt
+supplies every column of a duplicated row. References retain the shared ID.
+An existing row is updated in place, so replacement does not delete dependents.
+Failed transactions roll back and the next successful contributor supplies it.
+This policy can also intentionally override an ID already in the base database.
+
+For numeric primary keys, either contributor may opt into sharing. It takes
+precedence over error/nearest for that collision. Set it on every participating
+mod for consistent sharing, including composite or string keys. Rows are matched
+by their declared keys, not by similar names or values. Same-mod duplicate
+numeric primary-key inserts remain errors. SQLite integrity and foreign-key
+validation still apply. Nonconflicting rows from both mods are retained.
+
+`error` remains the default. `nearest` still creates distinct identities and
+rewrites references when sharing is not selected. `update_conflicts` separately
+controls explicit update operations. Carbin IDs are not remapped for shared
+rows; carbin/model/media files continue to use their existing merge/load-order
+rules. Sharing a database ID does not combine two different binary assets.
+The Mod Diff batch wizard now offers all three ID policies.

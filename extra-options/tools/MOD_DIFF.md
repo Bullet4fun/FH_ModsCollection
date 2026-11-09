@@ -14,7 +14,7 @@ vanilla input has a temporary name. Database output defaults to database.json.
 Existing files are replaced only after confirmation. Source files stay unchanged.
 
 Database choices: handling changed/deleted rows, override value conflicts,
-nearest-free-ID reassignment, table filters, explicit keys, target database path,
+duplicate ID policy (error, nearest-free-ID reassignment or last_wins sharing), table filters, explicit keys, target database path,
 output path and validation report. All native database CLI switches remain
 available through: python mod_diff.py database --help
 Carbin commands: python mod_diff.py carbin --help

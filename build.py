@@ -11,75 +11,84 @@ import tempfile
 
 SOURCE = Path(__file__).resolve().parent
 COMMON_SOURCES = [
-    "extra-options/dllmain.c",
-    "extra-options/runtime.c",
-    "extra-options/settings.c",
-    "common/support.c",
-    "common/logging.c",
+    "extra-options/shared/boot_diagnostics.c",
+    "extra-options/fh2/dllmain.c",
+    "extra-options/fh2/runtime.c",
+    "extra-options/fh2/settings.c",
+    "extra-options/shared/support.c",
+    "extra-options/shared/logging.c",
+    "extra-options/fh2/patch_engine.c",
+    "extra-options/fh2/verification.c",
+    "extra-options/shared/sha256.c",
+    "extra-options/fh2/patches_generated.c",
+    "extra-options/fh2/garage.c",
+    "extra-options/fh2/road_placement.c",
+    "extra-options/fh2/treasure_map.c",
+    "extra-options/fh2/minimap.c",
+    "extra-options/fh2/rims.c",
+    "extra-options/fh2/engine_swaps.c",
+    "extra-options/fh2/transmission_swaps.c",
+    "extra-options/fh2/return_garage.c",
+    "extra-options/fh2/stock_wheels.c",
+    "extra-options/fh2/wheel_variants.c",
+    "extra-options/fh2/world_drivatars.c",
+    "extra-options/fh2/local_liveries.c",
+    "extra-options/fh2/designs.c",
+    "extra-options/shared/plugins.c",
+    "extra-options/fh2/display_units.c",
+    "extra-options/fh2/drift_camera.c",
+    "extra-options/fh2/video_settings.c",
+    "extra-options/fh2/camera_fov.c",
+    "extra-options/fh2/video_options.c",
+    "extra-options/shared/video_options_text.c",
+    "extra-options/fh2/video_options_xaml.c",
+    "extra-options/fh2/photo_sampling.c",
+    "extra-options/fh2/sun_shadows.c",
+    "extra-options/fh2/livery.c",
+    "extra-options/fh2/media_overrides.c",
+    "extra-options/shared/media_files.c",
+    "extra-options/fh2/video_redirect.c",
+    "extra-options/fh2/showroom_photo.c",
+    "extra-options/fh2/manufacturer_jump.c",
+    "extra-options/fh2/presentation_controls.c",
+    "extra-options/fh2/driver_options.c",
+    "extra-options/fh2/photo_environment.c",
+    "extra-options/fh2/audio_volume.c",
+    "extra-options/fh2/pause_menu.c",
+    "extra-options/shared/addon_json.c",
+    "extra-options/shared/carbin_patch.c",
+    "extra-options/shared/addon_database.c",
+    "extra-options/shared/addon_cache.c", "extra-options/shared/addon_cache_io.c",
+    "extra-options/shared/addons.c",
+    "extra-options/shared/addon_archives.c",
+    "extra-options/shared/addon_strings.c",
+    "extra-options/shared/addon_wheels.c",
+    "extra-options/fh2/vehicle_controls.c",
+    "extra-options/fh2/headlight_beams.c",
+    "extra-options/fh2/blinkers.c",
+    "extra-options/fh2/aero_tuning.c",
+    "extra-options/fh2/roof_fade.c",
+    "extra-options/fh2/roof_aero.c",
+    "extra-options/fh2/speed_zone.c",
+    "extra-options/fh2/autodrive.c",
+    "extra-options/fh2/game_input.c",
+    "extra-options/fh2/bindings.c",
+    "extra-options/fh2/offline_events.c",
+    "extra-options/fh2/custom_showcases.c",
+    "extra-options/fh2/offline_event_division.c",
+    "extra-options/fh2/offline_event_setup.c",
+    "extra-options/fh2/autodrive_game.c",
+    "extra-options/fh2/autodrive_notice.c",
+    "extra-options/fh2/autodrive_ui.c",
+    "extra-options/fh2/ui_controls.c",
+    "extra-options/shared/adapters/mod.c",
+    "extra-options/shared/adapters/azimuth_host.c",
+    "extra-options/shared/adapters/azimuth_markers.c",
     "common/mod_log.c",
-    "extra-options/patch_engine.c",
-    "extra-options/verification.c",
-    "extra-options/sha256.c",
-    "extra-options/patches_generated.c",
-    "extra-options/features/garage.c",
-    "extra-options/features/road_placement.c",
-    "extra-options/features/treasure_map.c",
-    "extra-options/features/minimap.c",
-    "extra-options/features/rims.c",
-    "extra-options/features/return_garage.c",
-    "extra-options/features/stock_wheels.c",
-    "extra-options/features/wheel_variants.c",
-    "extra-options/features/drift_camera.c",
-    "extra-options/features/video_settings.c",
-    "extra-options/features/camera_fov.c",
-    "extra-options/features/video_options.c",
-    "extra-options/features/video_options_text.c",
-    "extra-options/features/video_options_xaml.c",
-    "extra-options/features/photo_sampling.c",
-    "extra-options/features/sun_shadows.c",
-    "extra-options/features/livery.c",
-    "extra-options/features/media_overrides.c",
-    "extra-options/features/vehicle_controls.c",
-    "extra-options/features/headlight_beams.c",
-    "extra-options/features/blinkers.c",
-    "extra-options/features/aero_tuning.c",
-    "extra-options/features/roof_fade.c",
-    "extra-options/features/autodrive.c",
-    "extra-options/features/game_input.c",
-    "extra-options/features/autodrive_game.c",
-    "extra-options/features/autodrive_notice.c",
-    "extra-options/features/autodrive_ui.c",
-    "extra-options/features/engine_swaps.c",
-    "extra-options/features/transmission_swaps.c",
-    "extra-options/features/world_drivatars.c",
-    "extra-options/features/local_liveries.c",
-    "extra-options/features/plugins.c",
-    "extra-options/features/display_units.c",
-    "extra-options/features/media_files.c",
-    "extra-options/features/video_redirect.c",
-    "extra-options/features/showroom_photo.c",
-    "extra-options/features/manufacturer_jump.c",
-    "extra-options/features/presentation_controls.c",
-    "extra-options/features/driver_options.c",
-    "extra-options/features/photo_environment.c",
-    "extra-options/features/audio_volume.c",
-    "extra-options/features/pause_menu.c",
-    "extra-options/features/addon_json.c",
-    "extra-options/features/carbin_patch.c",
-    "extra-options/features/addon_database.c",
-    "extra-options/features/addons.c",
-    "extra-options/features/addon_archives.c",
-    "extra-options/features/addon_strings.c",
-    "extra-options/features/addon_wheels.c",
-    "extra-options/features/roof_aero.c",
-    "extra-options/features/speed_zone.c",
-    "extra-options/features/bindings.c",
-    "extra-options/features/offline_events.c",
-    "extra-options/features/custom_showcases.c",
-    "extra-options/features/offline_event_division.c",
-    "extra-options/features/offline_event_setup.c",
-    "extra-options/features/ui_controls.c",
 ]
+FM5_SOURCES = ["extra-options/fm5/fm5.c", "extra-options/fm5/fm5_mods.c", "extra-options/fm5/fm5_carbin.c", "extra-options/fm5/fm5_rims.c", "extra-options/fm5/fm5_camera.c",
+               "extra-options/fm5/fm5_camera_menu.c", "extra-options/fm5/fm5_manufacturer.c", "extra-options/fm5/fm5_video.c", "extra-options/fm5/fm5_vehicle.c", "extra-options/fm5/fm5_ui.c", "extra-options/fm5/fm5_settings.c", "extra-options/fm5/fm5_driver.c", "extra-options/fm5/fm5_audio.c", "extra-options/fm5/fm5_badge.c", "extra-options/fm5/fm5_start.c", "extra-options/fm5/fm5_designs.c", "extra-options/fm5/fm5_local_liveries.c"]
+FH3_SOURCES = ["extra-options/fh3/fh3.c", "extra-options/fh3/fh3_mods.c", "extra-options/fh3/fh3_text.c"]
 # Separate mods for the loader; each is its own DLL in data\bin\mods\.
 DISCORD_SOURCES = ["discord-rpc/discord_mod.c", "discord-rpc/discord_rpc.c", "common/support.c", "common/mod_log.c"]
 SPOTIFY_SOURCES = ["spotify-radio/spotify_mod.c", "common/mod_log.c", "spotify-radio/spotify_bridge.c", "spotify-radio/track_controls.c",
@@ -89,9 +98,9 @@ LINE_IN_SOURCES = ["line-in-radio/line_in_capture.c", "line-in-radio/line_in_son
                    "line-in-radio/line_in_menu.c",
                    *SPOTIFY_SOURCES]
 INCLUDE_DIRS = ["common", "sdk", "extra-options", "spotify-radio", "discord-rpc"]
-SPOTIFY_VERSION = "1.4.1"
-DISCORD_VERSION = "1.4.0"
-LINE_IN_VERSION = "1.0.1"
+SPOTIFY_VERSION = "1.4.2"
+DISCORD_VERSION = "1.4.1"
+LINE_IN_VERSION = "1.0.2"
 
 
 def version_resource(compiler, directory, filename, description, product, version):
@@ -131,7 +140,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("zig", type=Path)
     parser.add_argument("--mod", action="store_true",
-                        help="Build ExtraOptions as data/bin/mods/FH2_ExtraOptions.dll for the loader")
+                        help="Build ExtraOptions as data/bin/mods/FH_ExtraOptions.dll for the loader")
     parser.add_argument("--discord", action="store_true", help="Build the Discord Rich Presence mod")
     parser.add_argument("--spotify", action="store_true", help="Build the Spotify radio mod")
     parser.add_argument("--line-in", action="store_true", help="Build the Line-in radio mod")
@@ -168,7 +177,7 @@ def compiler_arguments(compiler, options):
         str(compiler.parent / "lib/libc/include/any-windows-any"),
     ]
     if options.mod:
-        arguments.append("-DFH2_AZIMUTH=1")
+        arguments += ["-DFH2_AZIMUTH=1", "-DFH2_ENABLE_FM5=1", "-DEO_ENABLE_FH3=1"]
     if options.spotify:
         arguments.append(f'-DSPOTIFY_VERSION="{SPOTIFY_VERSION}"')  # the log's first line
     if options.discord:
@@ -181,24 +190,19 @@ def compiler_arguments(compiler, options):
 def describe(options):
     """(file description, product, version) for the VERSIONINFO resource."""
     if options.spotify:
-        return "Spotify radio for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH2 Mods Collection", SPOTIFY_VERSION
+        return "Spotify radio for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH Mods Collection", SPOTIFY_VERSION
     if options.discord:
-        return "Discord Rich Presence for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH2 Mods Collection", DISCORD_VERSION
+        return "Discord Rich Presence for Azimuth games (Azimuth Mod Loader mod)", "FH Mods Collection", DISCORD_VERSION
     if options.line_in:
-        return "Line-in radio for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH2 Mods Collection", LINE_IN_VERSION
-    header = (SOURCE / "common/extra_options.h").read_text(encoding="utf-8")
+        return "Line-in radio for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH Mods Collection", LINE_IN_VERSION
+    header = (SOURCE / "extra-options/shared/extra_options.h").read_text(encoding="utf-8")
     version = header.split('#define MOD_VERSION "', 1)[1].split('"', 1)[0]  # ExtraOptions' own version
-    return "Forza Horizon 2 Extra Options by RokkuDayo (Azimuth Mod Loader mod)", "Forza Horizon 2 Extra Options", version
+    return "Forza Horizon 2, Forza Horizon 3 and Forza Motorsport 5 Extra Options by RokkuDayo (Azimuth Mod Loader mod)", "Forza Extra Options", version
 
 def build(compiler, output, directory, options):
     directory.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     objects = []
-    azimuth_host = [
-        "extra-options/adapters/azimuth_host.c",
-        "extra-options/adapters/azimuth_save.c",
-        "extra-options/adapters/azimuth_markers.c",
-    ]
     if options.discord:
         sources = DISCORD_SOURCES
     elif options.spotify:
@@ -206,7 +210,7 @@ def build(compiler, output, directory, options):
     elif options.line_in:
         sources = LINE_IN_SOURCES
     else:  # --mod: the loader owns Azimuth's helper ABI and finds the game
-        sources = [*COMMON_SOURCES, "extra-options/adapters/mod.c", *azimuth_host]
+        sources = [*COMMON_SOURCES, *FM5_SOURCES, *FH3_SOURCES]
     arguments = compiler_arguments(compiler, options)
     # Every step runs in the build folder with relative names, and source paths are mapped to ".":
     # file paths end up in the PDB id, so where the repo or the build folder lives must not matter.
@@ -225,7 +229,7 @@ def build(compiler, output, directory, options):
             "-m",
             "i386:x86-64",
             "-d",
-            str(SOURCE / "common/kernel32.def"),
+            str(SOURCE / ("extra-options/shared" if options.mod else "common") / "kernel32.def"),
             "-l",
             import_library,
         ],
@@ -282,8 +286,8 @@ def build(compiler, output, directory, options):
 def main():
     options = parse_arguments()
     compiler = options.zig.resolve()
-    filename = ("FH2_ExtraOptions.dll" if options.mod
-                else "FH2_DiscordRPC.dll" if options.discord
+    filename = ("FH_ExtraOptions.dll" if options.mod
+                else "FH_DiscordRPC.dll" if options.discord
                 else "FH2_LineInRadio.dll" if options.line_in
                 else "FH2_SpotifyRadio.dll")
     output = (options.output or SOURCE.parent / filename).resolve()

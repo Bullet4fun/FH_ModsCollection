@@ -4,7 +4,7 @@ Enabled mods load top-level DLLs from their own `plugins` folder. The order is
 loadorder.txt order, then case-insensitive DLL filename order. No global plugins
 directory is scanned. Files are loaded once and remain resident until exit.
 
-`fh2_plugin.h` contains the dependency-free Windows C ABI. The optional
+`fh2/fh2_plugin.h` contains the dependency-free Windows C ABI. The optional
 `FH2PluginInitialize` receives a persistent context after DllMain returns on
 the loader worker. Returning FALSE retains the module but disables callbacks.
 The version1 context layout remains 64 bytes and has not changed.

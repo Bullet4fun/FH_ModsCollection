@@ -1,5 +1,5 @@
-#ifndef FH2_DISCORD_RPC_H
-#define FH2_DISCORD_RPC_H
+#ifndef FH_DISCORD_RPC_H
+#define FH_DISCORD_RPC_H
 
 #include "extra_options.h"
 

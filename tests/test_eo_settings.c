@@ -1,6 +1,6 @@
 /* Extra Options settings: the supplied FH2_ExtraOptions.ini parses with every key, a switch at 0
    turns its feature off over the in-game value, and an unknown key is still refused. */
-#include "settings.c"
+#include "fh2/settings.c"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +25,7 @@ int main(void) {
     swprintf(dir, MAX_PATH, L"%hs\\fh2-eo-settings-%lu\\", getenv("TEMP"), GetCurrentProcessId());
     CreateDirectoryW(dir, NULL);
 
-    FILE *f = fopen("extra-options/FH2_ExtraOptions.ini", "rb");
+    FILE *f = fopen("extra-options/config/FH2_ExtraOptions.ini", "rb");
     static char ini[32768];
     size_t n = fread(ini, 1, sizeof(ini) - 1, f);
     fclose(f);
