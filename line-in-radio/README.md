@@ -81,7 +81,7 @@ No cable is needed: `linux_radio.py` (in `mods/FH_LineInRadio/`) makes a sound o
 
 The script puts the song of the player playing there on the radio HUD and passes the track buttons to
 it (through MPRIS). Under Proton 11, the Songs folder plays MP3, M4A and WAV, not FLAC, and the HUD
-shows the file name (`Artist - Title.mp3`), not the tags. Forza Horizon 3 has not been tested under Proton yet.
+shows the file name (`Artist - Title.mp3`), not the tags.
 
 Upgrading from the `FH2_LineInRadio` version: the launch options need the new folder name, `FH_LineInRadio`.
 With the old one the game does not start.

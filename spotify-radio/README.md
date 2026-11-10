@@ -46,7 +46,7 @@ file.
 The same files work under Proton. Tested with DW-Proton, Proton-GE, Proton (stable) and
 Proton-CachyOS, Azimuth started from Steam with no extra launch options; the sign-in page opens in
 the system browser.
-Forza Horizon 3 has not been tested under Proton yet. Other Proton versions are untested: feedback on how it runs for you is very welcome.
+Other Proton versions are untested: feedback on how it runs for you is very welcome.
 
 ## Build librespot
 
