@@ -1,4 +1,4 @@
-/* Discord Rich Presence mod (mods\FH_DiscordRPC.dll): "Playing <the game>" (any of Azimuth's games) with
+/* Discord Rich Presence mod (mods\DiscordRPC.dll): "Playing <the game>" (any of Azimuth's games) with
    the elapsed time while the game runs. No settings; remove the DLL to turn it off. */
 #include "azimuth_mod.h"
 #include "discord_rpc.h"

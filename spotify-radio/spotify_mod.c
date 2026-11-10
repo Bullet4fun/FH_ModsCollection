@@ -1,6 +1,6 @@
-/* Spotify radio mod (mods\FH2_SpotifyRadio.dll): Spotify Connect (librespot) plays as the
+/* Spotify radio mod (mods\FH_SpotifyRadio.dll): Spotify Connect (librespot) plays as the
    game's own "Xbox Music" station, with Now Playing on the radio HUD. No settings. Its folder
-   mods\FH2_SpotifyRadio\ holds the log, librespot.exe, onevent.cmd and librespot's files (Spotify
+   mods\FH_SpotifyRadio\ holds the log, librespot.exe, onevent.cmd and librespot's files (Spotify
    login, volume, nowplaying.txt). */
 #include "track_controls.h"
 #include "azimuth_mod.h"
@@ -16,9 +16,9 @@
 #define LINE_IN_VERSION "dev"
 #endif
 
-// No AZIMUTH_MOD_GAMES: an undeclared mod counts as Forza Horizon 2 only, which is what this one is (every
-// hook is an FH2 address), so the loader never loads it into Fast & Furious. An explicit declaration
-// or a host->game check makes one antivirus ML engine flag the DLL.
+AZIMUTH_MOD_GAMES(AZIMUTH_GAME_FORZA_HORIZON_2 | AZIMUTH_GAME_FORZA_HORIZON_3);
+// The game is told apart by the code at its hook sites (spotify_bridge_detect_game), not host->game:
+// a host->game check made one antivirus ML engine flag the DLL.
 
 static wchar_t path[PATH_CAPACITY];
 
@@ -40,11 +40,12 @@ static wchar_t logo_previous[PATH_CAPACITY];
 /* Copies the mod's logo into Mount\spotifyradio\, a folder only this mod uses, as the Xbox Music
    station's HUD icon; the mod mounts that folder into the game's files itself. A logo this mod placed
    somewhere else last time (logo_installed.txt) is removed. 1: the logo is in place. */
-static int install_logo(const AzimuthModHost *host) {
-    if (!path_join(logo_source, host->data_dir, RADIO_WIDE(LOGO_FILE)) ||
-        !path_join(logo_record, host->data_dir, L"logo_installed.txt") ||
+static int install_logo(const AzimuthModHost *host, int fh3) {
+    if (!path_join(logo_source, host->data_dir, fh3 ? RADIO_WIDE(LOGO_FILE_FH3) : RADIO_WIDE(LOGO_FILE)) ||
+        !path_join(logo_record, host->data_dir, fh3 ? L"logo_installed_fh3.txt" : L"logo_installed.txt") ||
         GetFileAttributesW(logo_source) == INVALID_FILE_ATTRIBUTES) {
-        log_append("SPOTIFY: no " LOGO_FILE " in the mod folder; Xbox Music keeps its logo.\r\n");
+        log_append(fh3 ? "SPOTIFY: no " LOGO_FILE_FH3 " in the mod folder; Xbox Music keeps its logo.\r\n"
+                       : "SPOTIFY: no " LOGO_FILE " in the mod folder; Xbox Music keeps its logo.\r\n");
         return 0;
     }
     size_t cut = 0; // game_exe is ...\Mount\forza_durango_release_final.exe; the folder goes beside it
@@ -54,7 +55,7 @@ static int install_logo(const AzimuthModHost *host) {
     for (size_t i = 0; i < cut; ++i) logo_target[i] = host->game_exe[i];
     logo_target[cut] = 0;
     if (!path_join(logo_target, logo_target, RADIO_WIDE(LOGO_FOLDER) L"\\ui\\textures\\Anthem\\HUD\\") ||
-        !path_join(logo_target, logo_target, L"HUD_RadioIcon_Xbox_Music.swatchbin")) {
+        !path_join(logo_target, logo_target, fh3 ? L"RadioLogos\\Groove_Music.swatchbin" : L"HUD_RadioIcon_Xbox_Music.swatchbin")) {
         return 0;
     }
     for (size_t i = cut; logo_target[i]; ++i) { // create spotifyradio\ui\textures\Anthem\HUD\ as needed
@@ -99,28 +100,66 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     return TRUE;
 }
 
+/* This mod was FH2_<name>: an older install's config file, login and songs move to its folder now,
+   with the FH2_ gone from their names. What the zip just brought (librespot.exe) stays the new one. */
+static void move_old_data(const AzimuthModHost *host) {
+    static wchar_t old[PATH_CAPACITY], pattern[PATH_CAPACITY], from[PATH_CAPACITY], to[PATH_CAPACITY];
+    if (!path_join(old, host->mods_dir, RADIO_WIDE(RADIO_OLD_FILE)) || !path_join(pattern, old, L"*")) {
+        return;
+    }
+    WIN32_FIND_DATAW found;
+    HANDLE find = FindFirstFileW(pattern, &found);
+    if (find == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        wchar_t *name = found.cFileName;
+        if (same_ignore_case(name, L".") || same_ignore_case(name, L"..") || !path_join(from, old, name)) {
+            continue;
+        }
+        if (name[0] == L'F' && name[1] == L'H' && name[2] == L'2' && name[3] == L'_') {
+            for (wchar_t *c = name + 2; (c[0] = c[1]) != 0; ++c) {
+            }
+        }
+        if (path_join(to, host->data_dir, name)) {
+            MoveFileExW(from, to, 0);
+        }
+    } while (FindNextFileW(find, &found));
+    FindClose(find);
+    RemoveDirectoryW(old); // fails harmlessly while something is left in it
+}
+
 __declspec(dllexport) int AzimuthModLoad(const AzimuthModHost *host) {
     if (!host || host->size < sizeof(*host) || host->api_version != AZIMUTH_MOD_API_VERSION || !host->game_image) {
         return 0;
     }
+    int fh3 = spotify_bridge_detect_game(host->game_image);
     CreateDirectoryW(host->data_dir, NULL); // fails harmlessly if it exists
+    move_old_data(host);
     static wchar_t previous[PATH_CAPACITY]; // keep last session's log: problems get reported after a restart
     if (path_join(path, host->data_dir, RADIO_WIDE(RADIO_FILE) L".log") &&
         path_join(previous, host->data_dir, RADIO_WIDE(RADIO_FILE) L".previous.log")) {
         MoveFileExW(path, previous, MOVEFILE_REPLACE_EXISTING);
         mod_log_open(path, 1, RADIO_TAG);
-        log_append("FH2 " RADIO_TITLE " " RADIO_VERSION "\r\n");
+        log_append(fh3 ? "FH3 " RADIO_TITLE " " RADIO_VERSION "\r\n" : "FH2 " RADIO_TITLE " " RADIO_VERSION "\r\n");
+    }
+    // Both radios hook the same station: a second hook on the same code would crash the game.
+    static const wchar_t *const rivals[] = {
+#ifdef LINE_IN_RADIO
+        L"FH_SpotifyRadio.dll",
+#endif
+        L"FH2_SpotifyRadio.dll", L"FH2_LineInRadio.dll"};
+    for (unsigned i = 0; i < ARRAY_COUNT(rivals); ++i) {
+        if (path_join(path, host->mods_dir, rivals[i]) && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
+            log_append(RADIO_TITLE " stays off: the mods folder has another radio DLL that plays the same station "
+                                   "(an old FH2_ one, or Spotify Radio next to Line-in Radio). Keep one.\r\n");
+            return 1;
+        }
     }
 #ifdef LINE_IN_RADIO
-    // Both radios hook the same station: a second hook on the same code would crash the game.
-    if (path_join(path, host->mods_dir, L"FH2_SpotifyRadio.dll") && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
-        log_append("LINE-IN: FH2_SpotifyRadio.dll is in the mods folder and plays the same station; "
-                   "Line-in Radio stays off. Keep one of the two.\r\n");
-        return 1;
-    }
-    line_in_menu_install(host->game_image);
+    line_in_menu_install(host->game_image, fh3);
 #endif
-    if (install_logo(host)) {
+    if (install_logo(host, fh3)) {
         spotify_bridge_mount_logo_folder(host->game_image);
     }
     track_controls_load(host->data_dir);

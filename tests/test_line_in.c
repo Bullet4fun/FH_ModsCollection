@@ -11,6 +11,11 @@
 #include <string.h>
 #include <math.h>
 
+void *install_jmp_hook(unsigned char *target, size_t copy_len, void *hook) { // spotify_bridge.c's, not linked here
+    (void)target, (void)copy_len, (void)hook;
+    return NULL;
+}
+
 static int fails;
 #define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); fails++; } } while (0)
 
@@ -69,6 +74,9 @@ int main(int argc, char **argv) {
     static char songs_state[] = "Source=Songs\r\nShuffle=1\r\n";
     line_in_state_parse(songs_state);
     CHECK(line_in_use_songs && line_in_shuffle, "source.txt: the Songs folder");
+    static char old_output[] = "Source=Device\r\nDevice=Speakers (Forza Horizon 2 Radio)\r\n";
+    line_in_state_parse(old_output);
+    CHECK(!line_in_use_songs && !line_in_device[0], "source.txt: the Linux output's old name picks the output again");
     line_in_device[0] = 0;
 
     /* the Audio options rows: resources in the dictionary, rows right under Radio Volume */
@@ -87,6 +95,17 @@ int main(int argc, char **argv) {
           "the source row comes right under Radio Volume");
     CHECK(strstr(xaml, "{Binding SfxVolume}") > strstr(xaml, "LineInShuffleChoices"), "the rest of the page follows");
     CHECK(!line_in_menu_xaml(xaml, length, again, sizeof(again)), "rows are added once");
+    static const char fh3_page[] =
+        "<UserControl x:Class=\"ForzaUI.A_AudioOptions\"><ResourceDictionary><X/></ResourceDictionary>"
+        "<local:CommonListBox><local:SpinnerControl   Tag=\"{StaticResource A_DataItem_XboxMusicShuffle}\" Label=\"s\"/>"
+        "<Slider Value=\"{Binding RadioVolume}\"/><Slider Value=\"{Binding SfxVolume}\"/>"
+        "<local:SpinnerControl Focusable=\"False\" Visibility=\"{Binding V}\"/><local:SpinnerControl Focusable=\"False\"/>"
+        "</local:CommonListBox></UserControl>";
+    length = line_in_menu_xaml(fh3_page, sizeof(fh3_page) - 1, again, sizeof(again));
+    CHECK(length == strlen(again) && !strstr(again, "Focusable=\"False\" Visibility=") &&
+              strstr(again, "/><local:SpinnerControl Focusable=\"False\"/></local:CommonListBox></UserControl>"),
+          "Forza Horizon 3's list keeps only its last empty row");
+    CHECK(!strstr(again, "XboxMusicShuffle") && strstr(again, "<local:CommonListBox><Slider"), "Groove Music's Shuffle row goes");
     CHECK(!line_in_menu_xaml("<UserControl x:Class=\"ForzaUI.A_VideoOptions\"/>", 46, again, sizeof(again)),
           "other pages are left alone");
     CHECK(!strstr(xaml, "StaticResource EO_"), "Extra Options still sees a page it can extend");

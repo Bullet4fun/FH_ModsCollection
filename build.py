@@ -98,9 +98,9 @@ LINE_IN_SOURCES = ["line-in-radio/line_in_capture.c", "line-in-radio/line_in_son
                    "line-in-radio/line_in_menu.c",
                    *SPOTIFY_SOURCES]
 INCLUDE_DIRS = ["common", "sdk", "extra-options", "spotify-radio", "discord-rpc"]
-SPOTIFY_VERSION = "1.4.2"
+SPOTIFY_VERSION = "1.5.0"
 DISCORD_VERSION = "1.4.1"
-LINE_IN_VERSION = "1.0.2"
+LINE_IN_VERSION = "1.1.0"
 
 
 def version_resource(compiler, directory, filename, description, product, version):
@@ -140,7 +140,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("zig", type=Path)
     parser.add_argument("--mod", action="store_true",
-                        help="Build ExtraOptions as data/bin/mods/FH_ExtraOptions.dll for the loader")
+                        help="Build ExtraOptions as data/bin/mods/ExtraOptions.dll for the loader")
     parser.add_argument("--discord", action="store_true", help="Build the Discord Rich Presence mod")
     parser.add_argument("--spotify", action="store_true", help="Build the Spotify radio mod")
     parser.add_argument("--line-in", action="store_true", help="Build the Line-in radio mod")
@@ -245,7 +245,8 @@ def build(compiler, output, directory, options):
     # Line-in Radio: ole32 for the sound devices (WASAPI), mfplat/mfreadwrite to decode songs, shell32 for their tags,
     # combase for the players' media sessions (WinRT)
     line_in_libraries = ["ole32", "mfplat", "mfreadwrite", "shell32", "combase"] if options.line_in else []
-    for name in ("user32", "ws2_32", *line_in_libraries):
+    radio_libraries = ["xinput1_4"] if options.spotify or options.line_in else []
+    for name in ("user32", "ws2_32", *radio_libraries, *line_in_libraries):
         system_libraries.append(f"{name}.lib")
         subprocess.run([str(compiler), "dlltool", "-m", "i386:x86-64", "-d", str(SOURCE / f"common/{name}.def"),
                         "-l", system_libraries[-1]], check=True, cwd=directory)
@@ -286,10 +287,10 @@ def build(compiler, output, directory, options):
 def main():
     options = parse_arguments()
     compiler = options.zig.resolve()
-    filename = ("FH_ExtraOptions.dll" if options.mod
-                else "FH_DiscordRPC.dll" if options.discord
-                else "FH2_LineInRadio.dll" if options.line_in
-                else "FH2_SpotifyRadio.dll")
+    filename = ("ExtraOptions.dll" if options.mod
+                else "DiscordRPC.dll" if options.discord
+                else "FH_LineInRadio.dll" if options.line_in
+                else "FH_SpotifyRadio.dll")
     output = (options.output or SOURCE.parent / filename).resolve()
     if options.build_dir:
         build(compiler, output, options.build_dir.resolve(), options)

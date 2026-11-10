@@ -42,6 +42,14 @@ static HANDLE g_startup_thread = NULL;
 static volatile int g_bridge_running = 0;
 
 static unsigned char *g_game_image = NULL;
+static int g_fh3 = 0; // Forza Horizon 3: same design as Forza Horizon 2, other addresses
+#define RADIO_RVA(fh2, fh3) (g_fh3 ? (size_t)(fh3) : (size_t)(fh2))
+#define FH3_XBOX_STREAM_READ 0x198a520
+#define FH3_XBOX_COMMAND 0x198e290
+static const unsigned char fh3_read_prologue[14] = {0x48, 0x8b, 0xc4, 0x55, 0x56, 0x57, 0x41,
+                                                    0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x60};
+static const unsigned char fh3_command_prologue[15] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x56, 0x48, 0x83,
+                                                       0xec, 0x30, 0x80, 0x39, 0x00, 0x8b, 0xda};
 static FmodPlaySoundFn g_orig_playSound = NULL;
 static FmodSystemUpdateFn g_orig_update = NULL;
 static volatile LONG g_feed_busy = 0;
@@ -263,8 +271,11 @@ static int set_position_hook(void *channel, unsigned int position, unsigned int 
    DSP::setBypass 0x19a9cf0. */
 static int dsp_named(void *control, const char *wanted, void **found) {
     int count = 0;
-    if (!g_get_num_dsps || !g_dsp_get_info || g_get_num_dsps(control, &count) != 0) {
+    if (!g_get_dsp || !g_dsp_get_info || (g_get_num_dsps && g_get_num_dsps(control, &count) != 0)) {
         return 0;
+    }
+    if (!g_get_num_dsps) {
+        count = 16; // Forza Horizon 3 has no getNumDSPs to find: getDSP fails past the last one
     }
     for (int i = 0; i < count && i < 16; ++i) {
         void *dsp = NULL;
@@ -283,14 +294,13 @@ static int dsp_named(void *control, const char *wanted, void **found) {
     return 0;
 }
 
-static void xbox_route_through_radio_bus(void *channel) {
-    int (*num_groups)(void *, int *) = (int (*)(void *, int *))(g_game_image + 0x19a7050);
-    int (*child_group)(void *, int, void **) = (int (*)(void *, int, void **))(g_game_image + 0x19a6c90);
-    int (*add_group)(void *, void *, unsigned char, void *) = (int (*)(void *, void *, unsigned char, void *))(g_game_image + 0x19a6890);
-    int (*set_bypass)(void *, unsigned char) = (int (*)(void *, unsigned char))(g_game_image + 0x19a9cf0);
-    void *group = NULL;
-    if (!g_get_group || !g_get_parent || g_get_group(channel, &group) != 0) {
-        return;
+static void xbox_route_through_radio_bus(void *channel, void *group) {
+    int (*num_groups)(void *, int *) = (int (*)(void *, int *))(g_game_image + RADIO_RVA(0x19a7050, 0x27c40c0));
+    int (*child_group)(void *, int, void **) = (int (*)(void *, int, void **))(g_game_image + RADIO_RVA(0x19a6c90, 0x27c3ed0));
+    int (*add_group)(void *, void *, unsigned char, void *) = (int (*)(void *, void *, unsigned char, void *))(g_game_image + RADIO_RVA(0x19a6890, 0x27c3cb0));
+    int (*set_bypass)(void *, unsigned char) = (int (*)(void *, unsigned char))(g_game_image + RADIO_RVA(0x19a9cf0, 0x27c59a0));
+    if (!g_get_parent || (g_get_group && g_get_group(channel, &group) != 0)) {
+        return; // no getChannelGroup in Forza Horizon 3: playSound's own argument is the group
     }
     // walk up to the event's top group: the one whose parent is the radio bus (moved before) or whose
     // parent holds the radio bus beside it (the music bus)
@@ -331,7 +341,7 @@ static int spotify_radio_play_sound_hook(void *system, void *sound, void *channe
     int result = g_orig_playSound(system, sound, channelgroup, paused, out);
     if (result == 0 && *out) {
         g_xbox_channel = *out;
-        xbox_route_through_radio_bus(*out);
+        xbox_route_through_radio_bus(*out, channelgroup);
     }
     return result;
 }
@@ -406,7 +416,7 @@ static int station_locked_hook(void *profile, void *name) {
    on first play the FMOD one is built the way that engine would (factory 0xfeeec0 on engine+0x7f0,
    then its Init, vtable[0], which creates event:/Master/Radio/XboxLiveStreaming) and swapped in. The
    stub is left allocated (a few hundred bytes, once). Verified live: Spotify played on Xbox Music only. */
-#define XBOX_STREAM_VTABLE 0x2e76190
+#define XBOX_STREAM_VTABLE RADIO_RVA(0x2e76190, 0x4638c28)
 static void (*g_orig_xbox_command)(unsigned char *decoder, int command) = NULL;
 
 /* The event's programmer sound lasts 600s (seen: it stopped by itself exactly 600s after a start, with
@@ -415,8 +425,9 @@ static void (*g_orig_xbox_command)(unsigned char *decoder, int command) = NULL;
    the event stopped (type 1, the last callback of that natural stop: 2, 4, 1) while Xbox Music is
    still selected, the pipe worker starts it again. The ring carries on, so the song does too, after a
    short gap. Types seen: 3 programmer sound created, 0 started, 4 destroyed, 5 on a restart. */
-#define XBOX_EVENT_STOPPED 1
-#define XBOX_SOUND_DESTROYED 4
+// Forza Horizon 3's Studio reports bit flags: 0x20 stopped, 0x80 sound created, 0x100 destroyed
+#define XBOX_EVENT_STOPPED RADIO_RVA(1, 0x20)
+#define XBOX_SOUND_DESTROYED RADIO_RVA(4, 0x100)
 static volatile int g_xbox_selected = 0;     // the game's last Xbox Music command was play
 static void *volatile g_xbox_instance = NULL; // the station's event instance
 static volatile int g_xbox_restart = 0;      // stopped by itself: the pipe worker starts it again
@@ -449,11 +460,11 @@ static void xbox_keep_timeline(void) {
     }
     s_checked = now;
     int position = 0;
-    if (((int (*)(void *, int *))(g_game_image + 0x1a98b10))(g_xbox_instance, &position) != 0 || // getTimelinePosition
+    if (((int (*)(void *, int *))(g_game_image + RADIO_RVA(0x1a98b10, 0x28aaba0)))(g_xbox_instance, &position) != 0 || // getTimelinePosition
         position < XBOX_REWIND_AFTER_MS) {
         return;
     }
-    ((int (*)(void *, int))(g_game_image + 0x1a9b040))(g_xbox_instance, position - XBOX_REWIND_BY_MS); // setTimelinePosition
+    ((int (*)(void *, int))(g_game_image + RADIO_RVA(0x1a9b040, 0x28acf80)))(g_xbox_instance, position - XBOX_REWIND_BY_MS); // setTimelinePosition
 }
 
 static void xbox_restart_if_stopped(void) {
@@ -464,13 +475,41 @@ static void xbox_restart_if_stopped(void) {
     g_xbox_restart = 0;
     if (g_xbox_selected && g_xbox_instance) {
         g_xbox_started = GetTickCount64();
-        int res = ((int (*)(void *))(g_game_image + 0x1a9b390))(g_xbox_instance); // EventInstance::start
+        int res = ((int (*)(void *))(g_game_image + RADIO_RVA(0x1a9b390, 0x28ad230)))(g_xbox_instance); // EventInstance::start
         log_append_value("SPOTIFY: Xbox Music event ran out (600s), started again; result ", res);
     }
 }
 
+/* Forza Horizon 3 builds the FMOD stream object at startup (decoder+0x40, seen live); its event handle
+   is at +0x20 and Init already set the callback, so here it is only wrapped. */
+static void *xbox_event_fh3(unsigned char *decoder) {
+    void *object = NULL, *event = NULL;
+    if (!memory_read_pointer(decoder + 0x40, &object) || !object ||
+        *(unsigned char **)object != g_game_image + XBOX_STREAM_VTABLE) {
+        log_append("SPOTIFY: Xbox Music stream object not found.\r\n");
+        return NULL;
+    }
+    memory_read_pointer((unsigned char *)object + 0x20, &event);
+    if (!event) { // Init (vtable[0]) creates event:/Master/Radio/XboxLiveStreaming
+        (*(unsigned char (**)(void *, void *))*(void **)object)(object, decoder);
+        memory_read_pointer((unsigned char *)object + 0x20, &event);
+    }
+    if (!event) {
+        log_append("SPOTIFY: Xbox Music event could not be created.\r\n");
+        return NULL;
+    }
+    if (!g_orig_xbox_event_callback) {
+        g_orig_xbox_event_callback = (int (*)(unsigned int, void *, void *))(g_game_image + 0x198fef0);
+        ((int (*)(void *, void *, unsigned int))(g_game_image + 0x28ac990))(event, (void *)&xbox_event_callback, 0xffffffffu);
+    }
+    return event;
+}
+
 static void *xbox_event(unsigned char *decoder) {
     void *object = NULL, *event = NULL;
+    if (g_fh3) {
+        return xbox_event_fh3(decoder);
+    }
     memory_read_pointer(decoder + 0x18, &object);
     if (!object || *(unsigned char **)object != g_game_image + XBOX_STREAM_VTABLE) {
         void *engine = NULL, *made[2] = {NULL, NULL};
@@ -510,12 +549,20 @@ static void xbox_command_hook(unsigned char *decoder, int command) {
     g_xbox_instance = event;
     int res = -1;
     if (event) {
-        res = command == 0 ? ((int (*)(void *))(g_game_image + 0x1a9b390))(event)          // EventInstance::start
-                           : ((int (*)(void *, int))(g_game_image + 0x1a9b550))(event, 1); // stop, immediate
+        res = command == 0 ? ((int (*)(void *))(g_game_image + RADIO_RVA(0x1a9b390, 0x28ad230)))(event)          // EventInstance::start
+                           : ((int (*)(void *, int))(g_game_image + RADIO_RVA(0x1a9b550, 0x28ad3a0)))(event, 1); // stop, immediate
     }
     if (res != 0) {
         log_append_value(command == 0 ? "SPOTIFY: Xbox Music station could not start; result " : "SPOTIFY: Xbox Music station could not stop; result ", res);
     }
+}
+
+/* Forza Horizon 3 skips a station when this answers 1 (0x8ac910, the radio's station filter): for Xbox
+   Music it also asks the dead service. Seen live: answering 0 puts the station in the radio cycle. */
+static unsigned char (*g_orig_station_hidden)(void *radio, void *name) = NULL;
+static unsigned char station_hidden_hook_fh3(void *radio, void *name) {
+    unsigned char hidden = g_orig_station_hidden(radio, name);
+    return station_name_is(name, "Xbox Music", 10) ? 0 : hidden;
 }
 
 /* FMOD_SOUND_PCMREAD_CALLBACK of the endless stream: Spotify's audio, paced by the game's pulls. */
@@ -535,7 +582,7 @@ static int xbox_stream_read_hook(void *sound, void *data, unsigned int datalen) 
 // 14-byte absolute jmp at target; copy_len (>= 14) whole, non-RIP-relative prologue bytes
 // run from the returned trampoline. Returns NULL on failure. The trampoline is written, then made
 // read+execute: no memory is ever writable and executable at once (what antivirus heuristics flag).
-static void *install_jmp_hook(unsigned char *target, size_t copy_len, void *hook) {
+void *install_jmp_hook(unsigned char *target, size_t copy_len, void *hook) {
     unsigned char *trampoline = (unsigned char *)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!trampoline) {
         return NULL;
@@ -985,6 +1032,48 @@ static void hud_radio_event_hook(unsigned char *manager, int category, void *cod
 /* The audio options' Xbox Music line (A_AudioOptions.xaml: Visibility bound to IsXboxMusicEnabled,
    the view model's +0x431, read by the property getter 0xc72eb0) appears with the station's gate but
    only picks Xbox Music playlists, which do not exist: the getter always sees it off. */
+/* Forza Horizon 3's radio HUD: event 0x11 is "now playing", 0x23 the dead service's error, the error
+   flag is at +0x80, and track (+0x08) and artist (+0x28) are wide strings. */
+static int wide_string_is(void *value, const wchar_t *text, size_t length) {
+    size_t size = 0, capacity = 0;
+    if (!memory_read((unsigned char *)value + 0x10, &size, sizeof(size)) ||
+        !memory_read((unsigned char *)value + 0x18, &capacity, sizeof(capacity)) || size != length) {
+        return 0;
+    }
+    return memory_equal(capacity > 7 ? *(const wchar_t **)value : (const wchar_t *)value, text, length * sizeof(wchar_t));
+}
+
+// Now Playing text is already romanized, so a byte is a character.
+static size_t widen(const char *text, wchar_t *out, size_t capacity) {
+    size_t used = 0;
+    for (; text[used] && used + 1 < capacity; ++used) {
+        out[used] = (unsigned char)text[used];
+    }
+    out[used] = 0;
+    return used;
+}
+
+static void hud_radio_event_hook_fh3(unsigned char *manager, int category, void *code, void *payload) {
+    static wchar_t title[128], artist[128];
+    if (category == 0x23) {
+        return; // no Xbox Music service, no sign-in error
+    }
+    g_orig_hud_radio_event(manager, category, code, payload);
+    if (category != 0x11 || !station_name_is(manager + 0x48, "Xbox Music", 10)) {
+        return;
+    }
+    const NowPlaying *np = &g_np[__atomic_load_n(&g_np_shown, __ATOMIC_ACQUIRE)];
+    size_t title_length = widen(np->title, title, ARRAY_COUNT(title)), artist_length = widen(np->artist, artist, ARRAY_COUNT(artist));
+    if (wide_string_is(manager + 0x08, title, title_length) && wide_string_is(manager + 0x28, artist, artist_length) && !manager[0x80]) {
+        return;
+    }
+    void (*assign)(void *, const wchar_t *, size_t) = (void (*)(void *, const wchar_t *, size_t))(g_game_image + 0x2bb1f0);
+    assign(manager + 0x08, title, title_length);
+    assign(manager + 0x28, artist, artist_length);
+    manager[0x80] = 0;
+    ((void (*)(void *))(g_game_image + 0xb29c40))(manager);
+}
+
 static void *(*g_orig_xbox_option_visible)(void *out, void *property, unsigned char *model, void *extra) = NULL;
 
 static void *xbox_option_visible_hook(void *out, void *property, unsigned char *model, void *extra) {
@@ -993,6 +1082,26 @@ static void *xbox_option_visible_hook(void *out, void *property, unsigned char *
     }
     return g_orig_xbox_option_visible(out, property, model, extra);
 }
+
+#ifndef LINE_IN_RADIO
+/* Forza Horizon 3 shows Groove Music's Shuffle row even with Groove Music off, and it does nothing
+   for this station. Line-in Radio takes it out along with adding its own rows (line_in_menu.c). */
+static void (*g_orig_load_page)(void *loader) = NULL;
+
+static void load_page_hook(void *loader) {
+    g_orig_load_page(loader);
+    unsigned char *buffer;
+    char *bytes;
+    int size;
+    if (memory_read_pointer((unsigned char *)loader + 0x38, (void **)&buffer) && buffer &&
+        memory_read_pointer(buffer + 0x28, (void **)&bytes) && bytes &&
+        memory_read(buffer + 0x30, &size, sizeof(size)) && size > 0 && size <= 262144 &&
+        text_find(bytes, (size_t)size, "x:Class=\"ForzaUI.A_AudioOptions\"")) {
+        *(int *)(buffer + 0x30) = (int)text_remove_elements(
+            bytes, (size_t)size, "Tag=\"{StaticResource A_DataItem_XboxMusicShuffle}\"");
+    }
+}
+#endif
 
 /* The logo folder: game:\spotifyradio\ is mounted over game:\media\ on the game's first file lookup,
    the way the game mounts its own folders, below the mediaoverride and mediapc folders Extra Options
@@ -1033,18 +1142,19 @@ static void mount_logo_folder(void *filesystem) {
         return;
     }
     int mounted = 0;
-    void *storage = ((void *(*)(size_t))(g_mount_image + 0x3229c0))(0x50);
+    void *storage = ((void *(*)(size_t))(g_mount_image + RADIO_RVA(0x3229c0, 0x1edbd00)))(RADIO_RVA(0x50, 0x88));
     if (storage) {
         GameString source = game_string("game:\\" LOGO_FOLDER "\\");
         GameString destination = game_string("game:\\media\\");
-        void *volume = ((void *(*)(void *, const void *, unsigned char))(g_mount_image + 0x11e05a0))(storage, &source, 1);
+        GameString empty = {NULL, 0, 0, 15}; // Forza Horizon 3 reads this last argument; Forza Horizon 2 passes none
+        void *volume = ((void *(*)(void *, const void *, unsigned char))(g_mount_image + RADIO_RVA(0x11e05a0, 0x1c40610)))(storage, &source, 1);
         *(void ***)volume = g_folder_vtable + 1;
         void **methods = *(void ***)volume;
         ((void (*)(void *))methods[0x10 / 8])(volume);
         void **filesystem_methods = *(void ***)filesystem;
         mounted = ((unsigned char (*)(void *, const void *, void **, unsigned, unsigned char, unsigned char,
                                       const void *))filesystem_methods[0x1e8 / 8])(filesystem, &destination, &volume,
-                                                                                   0x7ffffffc, 0, 0, 0);
+                                                                                   0x7ffffffc, 0, 0, g_fh3 ? &empty : NULL);
         ((void (*)(void *))methods[0x18 / 8])(volume);
         ((void (*)(void *))filesystem_methods[0x1f8 / 8])(filesystem);
     }
@@ -1064,16 +1174,26 @@ void spotify_bridge_mount_logo_folder(unsigned char *game_image) {
     // mov rax,rsp / mov [rax+20h],r9 / mov [rax+10h],rdx / mov [rax+8],rcx = 15 bytes
     static const unsigned char resolve_prologue[15] = {0x48, 0x8b, 0xc4, 0x4c, 0x89, 0x48, 0x20, 0x48,
                                                        0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08};
+    // Forza Horizon 3 (CFileSys slot 0x210): mov [rsp+20h],r9 / mov [rsp+18h],r8 / mov [rsp+10h],rdx = 15 bytes
+    static const unsigned char resolve_prologue_fh3[15] = {0x4c, 0x89, 0x4c, 0x24, 0x20, 0x4c, 0x89, 0x44,
+                                                           0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10};
+    const unsigned char *prologue = g_fh3 ? resolve_prologue_fh3 : resolve_prologue;
     g_mount_image = game_image;
-    memory_copy(g_folder_vtable, game_image + 0x2eab910, sizeof(g_folder_vtable)); // keeps the RTTI slot
+    memory_copy(g_folder_vtable, game_image + RADIO_RVA(0x2eab910, 0x4678550), sizeof(g_folder_vtable)); // keeps the RTTI slot
     g_folder_file_exists = (unsigned char (*)(void *, const GameString *))g_folder_vtable[1 + 0xe8 / 8];
     g_folder_vtable[1 + 0xe8 / 8] = (void *)folder_file_exists_hook;
-    if (memory_equal(game_image + 0x11f49b0, resolve_prologue, sizeof(resolve_prologue))) {
-        g_orig_resolve = (ResolveFileFn)install_jmp_hook(game_image + 0x11f49b0, sizeof(resolve_prologue),
-                                                         (void *)&resolve_file_hook);
+    unsigned char *resolve = game_image + RADIO_RVA(0x11f49b0, 0x1c54da0);
+    if (memory_equal(resolve, prologue, sizeof(resolve_prologue))) {
+        g_orig_resolve = (ResolveFileFn)install_jmp_hook(resolve, sizeof(resolve_prologue), (void *)&resolve_file_hook);
     }
     log_append(g_orig_resolve ? "SPOTIFY: logo installed; its folder is mounted on the game's first file lookup.\r\n"
                               : "SPOTIFY: file lookup hook skipped (unexpected code); Xbox Music keeps its logo.\r\n");
+}
+
+int spotify_bridge_detect_game(unsigned char *game_image) {
+    g_fh3 = game_image && memory_equal(game_image + FH3_XBOX_STREAM_READ, fh3_read_prologue, sizeof(fh3_read_prologue)) &&
+            memory_equal(game_image + FH3_XBOX_COMMAND, fh3_command_prologue, sizeof(fh3_command_prologue));
+    return g_fh3;
 }
 
 void spotify_bridge_apply_audio_hook(unsigned char *game_image) {
@@ -1081,64 +1201,100 @@ void spotify_bridge_apply_audio_hook(unsigned char *game_image) {
         return;
     }
     g_game_image = game_image;
-    g_get_group = (int (*)(void *, void **))(game_image + 0x19abbd0);
-    g_get_parent = (int (*)(void *, void **))(game_image + 0x19a7170);
-    g_set_volume = (int (*)(void *, float))(game_image + 0x19a6470);
-    g_get_position = (int (*)(void *, unsigned int *, unsigned int))(game_image + 0x19ac440);
-    g_get_dsp = (int (*)(void *, int, void **))(game_image + 0x19a2860);
-    g_get_num_dsps = (int (*)(void *, int *))(game_image + 0x19a3230);
-    g_dsp_get_info = (int (*)(void *, char *, unsigned int *, int *, int *, int *))(game_image + 0x19a84c0);
-    g_param_set_value = (int (*)(void *, float))(game_image + 0x1a9b1e0);
+    g_get_group = g_fh3 ? NULL : (int (*)(void *, void **))(game_image + 0x19abbd0);
+    g_get_parent = (int (*)(void *, void **))(game_image + RADIO_RVA(0x19a7170, 0x27c41a0));
+    g_set_volume = (int (*)(void *, float))(game_image + RADIO_RVA(0x19a6470, 0x27c3450));
+    g_get_position = (int (*)(void *, unsigned int *, unsigned int))(game_image + RADIO_RVA(0x19ac440, 0x27c37e0));
+    g_get_dsp = (int (*)(void *, int, void **))(game_image + RADIO_RVA(0x19a2860, 0x27c1c30));
+    g_get_num_dsps = g_fh3 ? NULL : (int (*)(void *, int *))(game_image + 0x19a3230);
+    g_dsp_get_info = (int (*)(void *, char *, unsigned int *, int *, int *, int *))(game_image + RADIO_RVA(0x19a84c0, 0x27c4af0));
+    g_param_set_value = (int (*)(void *, float))(game_image + RADIO_RVA(0x1a9b1e0, 0x28ad0c0));
     // The gate is a vtable slot (the function starts RIP-relative), the read callback a jmp hook
     // that never calls back. Both or neither: checked before either is written.
     void **slot = (void **)(game_image + RADIO_SYSTEM_VTABLE + 0xc0);
     static const unsigned char read_prologue[14] = {0x48, 0x8b, 0xc4, 0x55, 0x57, 0x41, 0x54,
                                                     0x41, 0x56, 0x41, 0x57, 0x48, 0x8b, 0xec};
     DWORD protection = 0;
-    int ok = *slot == (void *)(game_image + XBOX_MUSIC_AVAILABLE) &&
-             memory_equal(game_image + XBOX_STREAM_READ, read_prologue, sizeof(read_prologue)) &&
-             install_jmp_hook(game_image + XBOX_STREAM_READ, sizeof(read_prologue), (void *)&xbox_stream_read_hook) &&
-             VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &protection);
-    if (ok) {
+    // Forza Horizon 3 has no such gate here: the setting it reads (IsGrooveMusicEnabled) is already on
+    int ok = g_fh3 ? install_jmp_hook(game_image + FH3_XBOX_STREAM_READ, sizeof(fh3_read_prologue), (void *)&xbox_stream_read_hook) != NULL
+                   : *slot == (void *)(game_image + XBOX_MUSIC_AVAILABLE) &&
+                         memory_equal(game_image + XBOX_STREAM_READ, read_prologue, sizeof(read_prologue)) &&
+                         install_jmp_hook(game_image + XBOX_STREAM_READ, sizeof(read_prologue), (void *)&xbox_stream_read_hook) &&
+                         VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &protection);
+    if (ok && !g_fh3) {
         *slot = (void *)&xbox_music_available_hook;
         VirtualProtect(slot, sizeof(*slot), protection, &protection);
     }
     // the profile's station lock: mov [rsp+10h],rdx / push rdi / sub rsp,30h / mov qword [rsp+20h],-2
     static const unsigned char lock_prologue[19] = {0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30,
                                                     0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff};
-    if (ok && memory_equal(game_image + 0xa65df0, lock_prologue, sizeof(lock_prologue))) {
+    // Forza Horizon 3: mov [rsp+10h],rbx / mov [rsp+18h],rsi / push rdi / sub rsp,20h
+    static const unsigned char fh3_lock_prologue[15] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74,
+                                                        0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20};
+    if (ok && g_fh3 && memory_equal(game_image + 0x1071390, fh3_lock_prologue, sizeof(fh3_lock_prologue))) {
+        g_orig_station_locked = install_jmp_hook(game_image + 0x1071390, sizeof(fh3_lock_prologue), (void *)&station_locked_hook);
+    }
+    if (ok && !g_fh3 && memory_equal(game_image + 0xa65df0, lock_prologue, sizeof(lock_prologue))) {
         g_orig_station_locked = install_jmp_hook(game_image + 0xa65df0, sizeof(lock_prologue), (void *)&station_locked_hook);
     }
     // RadioSystem's Xbox Music command: mov [rsp+18h],rbx / push rsi / sub rsp,30h / cmp byte [rcx],0 / mov ebx,edx
     static const unsigned char command_prologue[15] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x56, 0x48, 0x83,
                                                        0xec, 0x30, 0x80, 0x39, 0x00, 0x8b, 0xda};
-    if (ok && memory_equal(game_image + 0x1018420, command_prologue, sizeof(command_prologue))) {
-        g_orig_xbox_command = install_jmp_hook(game_image + 0x1018420, sizeof(command_prologue), (void *)&xbox_command_hook);
+    if (ok && memory_equal(game_image + RADIO_RVA(0x1018420, FH3_XBOX_COMMAND), command_prologue, sizeof(command_prologue))) {
+        g_orig_xbox_command = install_jmp_hook(game_image + RADIO_RVA(0x1018420, FH3_XBOX_COMMAND), sizeof(command_prologue), (void *)&xbox_command_hook);
     }
     // HudStatusRadioManager::OnSystemEvent: mov [rsp+10h],rsi / push rdi / sub rsp,30h / mov rsi,r9 / mov rdi,rcx
     static const unsigned char hud_prologue[16] = {0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83,
                                                    0xec, 0x30, 0x49, 0x8b, 0xf1, 0x48, 0x8b, 0xf9};
-    if (ok && memory_equal(game_image + 0x7835b0, hud_prologue, sizeof(hud_prologue))) {
+    // Forza Horizon 3: mov [rsp+8],rbx / mov [rsp+10h],rbp / mov [rsp+18h],rsi
+    static const unsigned char fh3_hud_prologue[15] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c,
+                                                       0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
+    if (ok && g_fh3 && memory_equal(game_image + 0xb25690, fh3_hud_prologue, sizeof(fh3_hud_prologue))) {
+        g_orig_hud_radio_event = install_jmp_hook(game_image + 0xb25690, sizeof(fh3_hud_prologue), (void *)&hud_radio_event_hook_fh3);
+    }
+    // Forza Horizon 3: mov rax,rsp / push rbp / push rdi / sub rsp,48h / cmp byte [rcx+58h],0 / mov rbp,rdx
+    static const unsigned char fh3_filter_prologue[16] = {0x48, 0x8b, 0xc4, 0x55, 0x57, 0x48, 0x83, 0xec,
+                                                          0x48, 0x80, 0x79, 0x58, 0x00, 0x48, 0x8b, 0xea};
+    if (ok && g_fh3 && memory_equal(game_image + 0x8ac910, fh3_filter_prologue, sizeof(fh3_filter_prologue))) {
+        g_orig_station_hidden = install_jmp_hook(game_image + 0x8ac910, sizeof(fh3_filter_prologue), (void *)&station_hidden_hook_fh3);
+    }
+    if (g_fh3) {
+        log_append(g_orig_station_hidden ? "SPOTIFY: Xbox Music station in the radio cycle.\r\n"
+                                         : "SPOTIFY: station filter hook skipped (unexpected code); Xbox Music stays hidden.\r\n");
+    }
+#ifndef LINE_IN_RADIO
+    static const unsigned char fh3_load_page_prologue[19] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x48, 0x8d, 0x6c,
+                                                             0x24, 0x90, 0x48, 0x81, 0xec, 0x70, 0x01, 0x00, 0x00};
+    if (ok && g_fh3 && memory_equal(game_image + 0x21dd6c0, fh3_load_page_prologue, sizeof(fh3_load_page_prologue))) {
+        g_orig_load_page = install_jmp_hook(game_image + 0x21dd6c0, sizeof(fh3_load_page_prologue), (void *)&load_page_hook);
+    }
+    if (g_fh3 && !g_orig_load_page) {
+        log_append("SPOTIFY: audio options page hook skipped (unexpected code); the Groove Music Shuffle row stays.\r\n");
+    }
+#endif
+    if (ok && !g_fh3 && memory_equal(game_image + 0x7835b0, hud_prologue, sizeof(hud_prologue))) {
         g_orig_hud_radio_event = install_jmp_hook(game_image + 0x7835b0, sizeof(hud_prologue), (void *)&hud_radio_event_hook);
     }
     // IsXboxMusicEnabled getter: mov [rsp+8],rcx / push rdi / sub rsp,40h / mov qword [rsp+30h],-2
     static const unsigned char option_prologue[19] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x40,
                                                       0x48, 0xc7, 0x44, 0x24, 0x30, 0xfe, 0xff, 0xff, 0xff};
-    if (ok && memory_equal(game_image + 0xc72eb0, option_prologue, sizeof(option_prologue))) {
+    if (ok && !g_fh3 && memory_equal(game_image + 0xc72eb0, option_prologue, sizeof(option_prologue))) {
         g_orig_xbox_option_visible = install_jmp_hook(game_image + 0xc72eb0, sizeof(option_prologue), (void *)&xbox_option_visible_hook);
     }
     // AudioSnapshotManagerFmod's copy: mov [rsp+8],rbx / push rdi / sub rsp,20h / mov rbx,[rcx+48h] / mov rdi,rcx
     static const unsigned char snapshot_prologue[17] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec,
                                                         0x20, 0x48, 0x8b, 0x59, 0x48, 0x48, 0x8b, 0xf9};
     void *snapshot_hooked = NULL;
-    if (ok && memory_equal(game_image + 0x1024570, snapshot_prologue, sizeof(snapshot_prologue))) {
+    if (ok && !g_fh3 && memory_equal(game_image + 0x1024570, snapshot_prologue, sizeof(snapshot_prologue))) {
         snapshot_hooked = install_jmp_hook(game_image + 0x1024570, sizeof(snapshot_prologue), (void *)&snapshot_copy_hook);
     }
     // One line per hook, installed or not: a bug report shows at a glance what is in.
-    log_append(snapshot_hooked ? "SPOTIFY: Xbox Music gets the stock radio mix (festival speakers on).\r\n"
-                               : "SPOTIFY: snapshot hook skipped (unexpected code); no festival speakers on Xbox Music.\r\n");
-    log_append(g_orig_xbox_option_visible ? "SPOTIFY: Xbox Music line hidden from the audio options.\r\n"
-                                          : "SPOTIFY: audio options hook skipped (unexpected code); the Xbox Music line stays.\r\n");
+    if (!g_fh3) { // Forza Horizon 3 mixes the station like any other without these (heard in game)
+        log_append(snapshot_hooked ? "SPOTIFY: Xbox Music gets the stock radio mix (festival speakers on).\r\n"
+                                   : "SPOTIFY: snapshot hook skipped (unexpected code); no festival speakers on Xbox Music.\r\n");
+        log_append(g_orig_xbox_option_visible ? "SPOTIFY: Xbox Music line hidden from the audio options.\r\n"
+                                              : "SPOTIFY: audio options hook skipped (unexpected code); the Xbox Music line stays.\r\n");
+    }
     log_append(g_orig_hud_radio_event ? "SPOTIFY: radio HUD hook installed (Spotify's track on Xbox Music, no sign-in error).\r\n"
                                       : "SPOTIFY: radio HUD hook skipped (unexpected code).\r\n");
     log_append(g_orig_xbox_command ? "SPOTIFY: Xbox Music station plays Spotify's event (play/stop command hooked).\r\n"
@@ -1151,8 +1307,10 @@ void spotify_bridge_apply_audio_hook(unsigned char *game_image) {
     // push rdi / sub rsp,160h / mov qword [rsp+48h],-2 = 18 bytes, nothing RIP-relative.
     static const unsigned char update_prologue[18] = {0x40, 0x57, 0x48, 0x81, 0xec, 0x60, 0x01, 0x00, 0x00,
                                                       0x48, 0xc7, 0x44, 0x24, 0x48, 0xfe, 0xff, 0xff, 0xff};
-    unsigned char *update_target = game_image + 0x199d510;
-    if (memory_equal(update_target, update_prologue, sizeof(update_prologue))) {
+    static const unsigned char fh3_update_prologue[18] = {0x40, 0x57, 0x48, 0x81, 0xec, 0x60, 0x01, 0x00, 0x00,
+                                                          0x48, 0xc7, 0x44, 0x24, 0x40, 0xfe, 0xff, 0xff, 0xff};
+    unsigned char *update_target = game_image + RADIO_RVA(0x199d510, 0x27c0900);
+    if (memory_equal(update_target, g_fh3 ? fh3_update_prologue : update_prologue, sizeof(update_prologue))) {
         g_orig_update = (FmodSystemUpdateFn)install_jmp_hook(update_target, sizeof(update_prologue), (void *)&fmod_update_hook);
     }
     log_append(g_orig_update ? "SPOTIFY: FMOD update hook installed.\r\n"
@@ -1161,8 +1319,11 @@ void spotify_bridge_apply_audio_hook(unsigned char *game_image) {
     // Channel::setPosition: push rbx/rbp/rsi/rdi/r14 / sub rsp,170h = 14 bytes
     static const unsigned char seek_prologue[14] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56,
                                                     0x48, 0x81, 0xec, 0x70, 0x01, 0x00, 0x00};
-    if (memory_equal(game_image + 0x19acec0, seek_prologue, sizeof(seek_prologue))) {
-        g_orig_set_position = install_jmp_hook(game_image + 0x19acec0, sizeof(seek_prologue), (void *)&set_position_hook);
+    static const unsigned char fh3_seek_prologue[14] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56,
+                                                        0x48, 0x81, 0xec, 0x60, 0x01, 0x00, 0x00};
+    unsigned char *seek_target = game_image + RADIO_RVA(0x19acec0, 0x27c3ac0);
+    if (memory_equal(seek_target, g_fh3 ? fh3_seek_prologue : seek_prologue, sizeof(seek_prologue))) {
+        g_orig_set_position = install_jmp_hook(seek_target, sizeof(seek_prologue), (void *)&set_position_hook);
     }
     log_append(g_orig_set_position ? "SPOTIFY: seek hook installed (Xbox Music plays past 600s).\r\n"
                                    : "SPOTIFY: seek hook skipped (unexpected code); Xbox Music restarts every 600s.\r\n");
@@ -1170,7 +1331,7 @@ void spotify_bridge_apply_audio_hook(unsigned char *game_image) {
     // System::playSound. Prologue: push rbx/rbp/rsi/rdi/r14/r15 / sub rsp,168h = 16 bytes
     static const unsigned char play_prologue[16] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41,
                                                     0x57, 0x48, 0x81, 0xec, 0x68, 0x01, 0x00, 0x00};
-    unsigned char *play_target = game_image + 0x199b0f0;
+    unsigned char *play_target = game_image + RADIO_RVA(0x199b0f0, 0x27bfa40);
     if (memory_equal(play_target, play_prologue, sizeof(play_prologue))) {
         g_orig_playSound = (FmodPlaySoundFn)install_jmp_hook(play_target, sizeof(play_prologue), (void *)&spotify_radio_play_sound_hook);
     }
@@ -1200,12 +1361,23 @@ static int game_focused(void) {
     return process == GetCurrentProcessId();
 }
 
+DWORD WINAPI XInputGetState(DWORD user, void *state);
+
 // The buttons held on the game's active controller (the same read as Extra Options' autodrive).
 static unsigned short game_buttons(void) {
     void *manager, *vtable, *controller;
     unsigned char connected;
     unsigned short buttons = 0;
     unsigned char *image = g_controls_image;
+    if (g_fh3) { // the bindings' button bits are XInput's
+        struct { DWORD packet; WORD buttons; BYTE rest[10]; } pad; // XINPUT_STATE
+        for (DWORD i = 0; i < 4; ++i) {
+            if (XInputGetState(i, &pad) == 0) {
+                buttons |= pad.buttons;
+            }
+        }
+        return buttons;
+    }
     if (!image || !memory_read_pointer(image + 0x365d7c8, &manager) || !memory_read_pointer(manager, &vtable) ||
         vtable != image + 0x2e7a2e8 || !memory_read_pointer((unsigned char *)manager + 0xab28, &controller)) {
         return 0;
@@ -1321,7 +1493,7 @@ static DWORD WINAPI spotify_startup_thread(LPVOID param) {
     PROCESS_INFORMATION pi;
     memory_copy(&pi, &(PROCESS_INFORMATION){0}, sizeof(pi));
 
-    static const wchar_t cmd[] = L"\"librespot.exe\" -n \"Forza Horizon 2 Radio\" -b 320 --backend pipe --system-cache . --onevent .\\onevent.cmd";
+    static const wchar_t cmd[] = L"\"librespot.exe\" -n \"Forza Horizon Radio\" -b 320 --backend pipe --system-cache . --onevent .\\onevent.cmd";
     for (size_t i = 0; i < sizeof(cmd) / sizeof(wchar_t); ++i) {
         s_cmdline[i] = cmd[i];
     }

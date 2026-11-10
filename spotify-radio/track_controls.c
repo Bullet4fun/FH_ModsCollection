@@ -6,10 +6,10 @@
 #define WIDE(text) WIDE_(text)
 #ifdef LINE_IN_RADIO // Line-in Radio's INI: these buttons plus [Audio] Device
 #include "line_in_capture.h"
-#define RADIO_INI "FH2_LineInRadio.ini"
+#define RADIO_INI "FH_LineInRadio.ini"
 #define RADIO_LOG "LINE-IN: "
 #else
-#define RADIO_INI "FH2_SpotifyRadio.ini"
+#define RADIO_INI "FH_SpotifyRadio.ini"
 #define RADIO_LOG "SPOTIFY: "
 #endif
 
@@ -33,7 +33,7 @@ static const char *const ini_keys[TRACK_COMMANDS][2] = {
 
 static const char default_ini[] =
 #ifdef LINE_IN_RADIO
-    "// FH2 Line-in Radio by Bullet4fun: https://github.com/Bullet4fun/FH_ModsCollection\r\n"
+    "// FH Line-in Radio by Bullet4fun: https://github.com/Bullet4fun/FH_ModsCollection\r\n"
     "// Works with Azimuth 1.0.3 and 1.0.4 and the Azimuth Mod Loader; other Azimuth versions are untested.\r\n"
     "//\r\n"
     "// Read at game startup. A key left out keeps its default; an empty value turns a button off.\r\n"
@@ -43,7 +43,7 @@ static const char default_ini[] =
     "// the mod's own player, with a device they go to the player playing into it.\r\n"
     "\r\n"
 #else
-    "// FH2 Spotify Radio by Bullet4fun: https://github.com/Bullet4fun/FH_ModsCollection\r\n"
+    "// FH Spotify Radio by Bullet4fun: https://github.com/Bullet4fun/FH_ModsCollection\r\n"
     "// Works with Azimuth 1.0.3 and 1.0.4 and the Azimuth Mod Loader; other Azimuth versions are untested.\r\n"
     "//\r\n"
     "// Read at game startup. A key left out keeps its default; an empty value turns a button off.\r\n"

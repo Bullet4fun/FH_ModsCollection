@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Line-in Radio on Linux (Proton): while the game runs, a sound output named "Forza Horizon 2 Radio"
+"""Line-in Radio on Linux (Proton): while the game runs, a sound output named "Forza Horizon Radio"
 that any player can play into, the radio's Device; and the song of the player playing there on the
 radio HUD, with the track buttons sent to that player. Wine has no Windows media sessions, so this
 side does it with MPRIS.
 
 It wraps the game's command; in Steam's launch options:
 
-  python3 /path/to/mods/FH2_LineInRadio/linux_radio.py %command%
+  python3 /path/to/mods/FH_LineInRadio/linux_radio.py %command%
 
-Keep this file in mods/FH2_LineInRadio/: it writes nowplaying.txt and reads command.txt there."""
+Keep this file in mods/FH_LineInRadio/: it writes nowplaying.txt and reads command.txt there."""
 
 import json
 import os
@@ -20,8 +20,8 @@ import threading
 import time
 from urllib.parse import unquote, urlparse
 
-SINK = "fh2_radio"
-DESCRIPTION = "Forza Horizon 2 Radio"
+SINK = "fh_radio"
+DESCRIPTION = "Forza Horizon Radio"
 FOLDER = Path(__file__).resolve().parent
 RUNNING = FOLDER / "linux_radio.running"  # there while this script runs
 # The quoting PipeWire's module-null-sink needs for a description with spaces (PulseAudio takes it too).

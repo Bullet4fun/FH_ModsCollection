@@ -13,6 +13,7 @@ static int fails;
 
 /* the game's lock check says "locked" for everything; names are MSVC std::strings (inline < 16) */
 static int fake_station_locked(void *profile, void *name) { (void)profile; (void)name; return 1; }
+static unsigned char fake_station_hidden(void *radio, void *name) { (void)radio; (void)name; return 1; }
 static float param_values[4];
 static int fake_param_set(void *instance, float value) { param_values[(uintptr_t)instance & 3] = value; return 0; }
 static void *std_string(const char *text) {
@@ -64,6 +65,11 @@ int main(void) {
               station_locked_hook(NULL, std_string("Innovative Leisure")) == 1 &&
               station_locked_hook(NULL, std_string("Xbox Music Extra")) == 1,
           "story-locked stations stay locked");
+
+    /* Forza Horizon 3's station filter: only "Xbox Music" is always shown. */
+    g_orig_station_hidden = fake_station_hidden;
+    CHECK(station_hidden_hook_fh3(NULL, std_string("Xbox Music")) == 0, "FH3: Xbox Music is in the radio cycle");
+    CHECK(station_hidden_hook_fh3(NULL, std_string("Timeless FM")) == 1, "FH3: other stations keep the game's answer");
 
     /* The snapshot copy: RADIO_Station 8 (Xbox Music) reaches Studio as 6; other values and params pass. */
     g_param_set_value = fake_param_set;

@@ -3,7 +3,7 @@
 
 #include "extra_options.h"
 
-/* Track buttons for Spotify Radio, set in FH2_SpotifyRadio.ini. */
+/* Track buttons for Spotify Radio, set in FH_SpotifyRadio.ini. */
 
 enum { TRACK_NONE, TRACK_NEXT, TRACK_PREVIOUS, TRACK_PLAY_PAUSE, TRACK_COMMANDS };
 
@@ -16,7 +16,7 @@ typedef struct {
 // "LS", "LS LS" (double tap), "LS+RB" (together), "F6"; empty = off. 0: not understood.
 int track_binding_parse(const char *text, TrackBinding *binding);
 
-// Reads <folder>FH2_SpotifyRadio.ini, writing the default one first if there is none.
+// Reads <folder>FH_SpotifyRadio.ini, writing the default one first if there is none.
 void track_controls_load(const wchar_t *folder);
 
 // One poll: the buttons and keys held now. Returns the TRACK_* command to send, or TRACK_NONE.

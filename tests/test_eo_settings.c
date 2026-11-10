@@ -1,6 +1,7 @@
 /* Extra Options settings: the supplied FH2_ExtraOptions.ini parses with every key, a switch at 0
    turns its feature off over the in-game value, and an unknown key is still refused. */
 #include "fh2/settings.c"
+#include "shared/config_value.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,20 @@ int main(void) {
     wchar_t dir[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%hs\\fh2-eo-settings-%lu\\", getenv("TEMP"), GetCurrentProcessId());
     CreateDirectoryW(dir, NULL);
+
+    /* Forza Horizon 3 and Motorsport 5 read theirs through the Windows call, with comments after the values. */
+    wchar_t value[16], template_path[MAX_PATH];
+    GetFullPathNameW(L"extra-options/config/FH3_ExtraOptions.ini", MAX_PATH, template_path, NULL);
+    GetPrivateProfileStringW(L"Frontend", L"SkipIntro", L"x", value, 16, template_path);
+    config_value_trim(value);
+    CHECK(!wcscmp(value, L"1"), "FH3's config file: the value, without the comment after it");
+    GetFullPathNameW(L"extra-options/config/FM5_ExtraOptions.ini", MAX_PATH, template_path, NULL);
+    GetPrivateProfileStringW(L"Bindings", L"ToggleUIXbox", L"x", value, 16, template_path);
+    config_value_trim(value);
+    CHECK(!wcscmp(value, L"None"), "FM5's config file: the value, without the comment after it");
+    wcscpy(value, L"1             /");
+    config_value_trim(value);
+    CHECK(!wcscmp(value, L"1"), "a short buffer that ends inside the comment's // still gives the value");
 
     FILE *f = fopen("extra-options/config/FH2_ExtraOptions.ini", "rb");
     static char ini[32768];

@@ -1,6 +1,6 @@
 # Line-in Radio
 
-Plays your own music in Forza Horizon 2 as an in-game radio station: in the car, at car
+Plays your own music in Forza Horizon 2 and Forza Horizon 3 as an in-game radio station: in the car, at car
 meets and from the festival speakers, with the song's title and artist on the radio HUD. The music
 comes from either:
 
@@ -9,12 +9,14 @@ comes from either:
   sound device you don't listen to, such as a virtual cable.
 
 Line-in Radio and Spotify Radio use the same station, so only one of them can be installed: with
-`FH2_SpotifyRadio.dll` in the `mods` folder, Line-in Radio stays off.
+`FH_SpotifyRadio.dll` in the `mods` folder, Line-in Radio stays off.
 
 ## Install
 
-Unzip `FH2_LineInRadio.zip` into the Azimuth folder (where `azimuth.exe` is). It needs the
+Unzip `FH_LineInRadio.zip` into the Azimuth folder (where `azimuth.exe` is). It needs the
 [Azimuth Mod Loader](https://github.com/Bullet4fun/Azimuth_ModLoader).
+
+Upgrading from the `FH2_LineInRadio` version: delete `FH2_LineInRadio.dll` from `mods`, or the mod stays off. At the next start it moves your config file, songs and device choice from `mods\FH2_LineInRadio\` to `mods\FH_LineInRadio\`. Delete the old folder after that.
 
 ## Pick what the radio plays
 
@@ -28,7 +30,7 @@ Then tune the car radio to Line-in Radio.
 
 ## The Songs folder
 
-1. Start the game once: the mod makes `mods\FH2_LineInRadio\Songs\`.
+1. Start the game once: the mod makes `mods\FH_LineInRadio\Songs\`.
 2. Put music files there: MP3, FLAC, WAV, M4A, AAC or WMA.
 3. Restart the game and pick `Songs folder` in the Audio settings.
 
@@ -65,29 +67,32 @@ that doesn't show up there still plays, without its song on the HUD and without 
 
 ## Linux (Proton)
 
-No cable is needed: `linux_radio.py` (in `mods/FH2_LineInRadio/`) makes a sound output named
-**Forza Horizon 2 Radio** while the game runs, and removes it when the game closes.
+No cable is needed: `linux_radio.py` (in `mods/FH_LineInRadio/`) makes a sound output named
+**Forza Horizon Radio** while the game runs, and removes it when the game closes.
 
 1. In Steam: the game's *Properties → Launch Options*, put the script in front of `%command%`
    (keep what is already there, with your own Azimuth folder):
 
-       WINEDLLOVERRIDES="dinput8=n,b" python3 ~/Games/Azimuth/mods/FH2_LineInRadio/linux_radio.py %command%
+       WINEDLLOVERRIDES="dinput8=n,b" python3 ~/Games/Azimuth/mods/FH_LineInRadio/linux_radio.py %command%
 
-2. Start the game, send your player to `Forza Horizon 2 Radio` (its own audio settings, pavucontrol
+2. Start the game, send your player to `Forza Horizon Radio` (its own audio settings, pavucontrol
    or the desktop's sound settings) and pick that output in the game's Audio settings. With an empty
    Songs folder, the radio plays it from the start.
 
 The script puts the song of the player playing there on the radio HUD and passes the track buttons to
 it (through MPRIS). Under Proton 11, the Songs folder plays MP3, M4A and WAV, not FLAC, and the HUD
-shows the file name (`Artist - Title.mp3`), not the tags.
+shows the file name (`Artist - Title.mp3`), not the tags. Forza Horizon 3 has not been tested under Proton yet.
+
+Upgrading from the `FH2_LineInRadio` version: the launch options need the new folder name, `FH_LineInRadio`.
+With the old one the game does not start.
 
 ## Track buttons
 
 While Line-in Radio plays in the car: tap the left stick for the next track, twice for the previous
 one; F6, F5 and F7 (play/pause) on the keyboard. Change them in the config file,
-`mods\FH2_LineInRadio\FH2_LineInRadio.ini`, made at the first start.
+`mods\FH_LineInRadio\FH_LineInRadio.ini`, made at the first start.
 
 ## If something doesn't work
 
-The mod's log, `mods\FH2_LineInRadio\FH2_LineInRadio.log`, lists every sound device it can see and
+The mod's log, `mods\FH_LineInRadio\FH_LineInRadio.log`, lists every sound device it can see and
 says where each track button went. Please attach it to an issue.

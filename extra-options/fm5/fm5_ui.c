@@ -1,4 +1,5 @@
 #include "fm5/fm5_ui.h"
+#include "shared/config_value.h"
 #include "fm5/fm5_vehicle.h"
 #include "shared/support.h"
 
@@ -50,6 +51,7 @@ unsigned fm5_read_binding(const wchar_t *ini, const wchar_t *key, int controller
     wchar_t text[64];
     if (ini) {
         GetPrivateProfileStringW(L"Bindings", key, fallback, text, ARRAY_COUNT(text), ini);
+        config_value_trim(text);
         if (parse(text, controller, &value)) return value;
     }
     parse(fallback, controller, &value);

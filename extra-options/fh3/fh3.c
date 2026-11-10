@@ -1,4 +1,5 @@
 #include "fh3.h"
+#include "shared/config_value.h"
 #include "fh3_internal.h"
 #include "fh3_text.h"
 #include "shared/sha256.h"
@@ -56,6 +57,7 @@ static int option(const wchar_t *section, const wchar_t *key, int fallback) {
     wchar_t value[16];
     GetPrivateProfileStringW(section, key, fallback ? L"1" : L"0", value, ARRAY_COUNT(value),
                              ini_path);
+    config_value_trim(value);
     if (value[0] == L'0' && !value[1]) return 0;
     if (value[0] == L'1' && !value[1]) return 1;
     log_append(fallback ? "CONFIG: invalid boolean; expected 0 or 1, using default 1.\r\n"
@@ -428,11 +430,13 @@ static void read_autodrive_bindings(void) {
     wchar_t value[64];
     GetPrivateProfileStringW(L"Vehicle", L"AutodriveKey", L"F2", value, ARRAY_COUNT(value),
                              ini_path);
+    config_value_trim(value);
     int key = parse_key(value);
     if (key) toggle_key = key;
     else log_append("CONFIG: invalid AutodriveKey; using F2.\r\n");
     GetPrivateProfileStringW(L"Vehicle", L"AutodriveButtons", L"L3+R3", value,
                              ARRAY_COUNT(value), ini_path);
+    config_value_trim(value);
     WORD buttons = parse_buttons(value);
     if (buttons) toggle_buttons = buttons;
     else log_append("CONFIG: invalid AutodriveButtons; using L3+R3.\r\n");
@@ -2147,8 +2151,21 @@ static void ui_save(const wchar_t *section, const wchar_t *key, int value) {
     } while (magnitude);
     if (value < 0) text[length++] = L'-';
     while (count) text[length++] = digits[--count];
-    text[length] = 0;
-    WritePrivateProfileStringW(section, key, text, ini_path);
+    // shortcut: the Windows call writes Key=value, so a row saved in-game loses the spaces around the =
+    // and keeps its comment; a writer of its own would be needed to keep them.
+    static wchar_t old[2048], saved[2048 + 48];
+    GetPrivateProfileStringW(section, key, L"", old, ARRAY_COUNT(old), ini_path);
+    const wchar_t *comment = old;
+    while (*comment && !(comment[0] == L'/' && comment[1] == L'/')) ++comment;
+    unsigned at = 0, key_length = 0;
+    while (key[key_length]) ++key_length;
+    for (; at < length; ++at) saved[at] = text[at];
+    if (*comment) {
+        do saved[at++] = L' '; while (key_length + 1 + at < 35 && at < 40);
+        while (*comment) saved[at++] = *comment++;
+    }
+    saved[at] = 0;
+    WritePrivateProfileStringW(section, key, saved, ini_path);
 }
 
 static int picker_owns(void *popup);
@@ -3437,6 +3454,7 @@ int fh3_initialize(unsigned title_id, unsigned char *game, const wchar_t *execut
         wchar_t value[32];
         GetPrivateProfileStringW(L"Camera", camera_fovs[i].key, L"0", value, ARRAY_COUNT(value),
                                  ini_path);
+        config_value_trim(value);
         camera_fovs[i].value = parse_degrees(value);
         camera_fov_used |= camera_fovs[i].value != 0.0f;
     }

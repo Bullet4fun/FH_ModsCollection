@@ -89,6 +89,24 @@ const char *text_find_unique(const char *text, size_t length, const char *needle
     return found;
 }
 
+/* Takes every XML element holding needle out of text, from its '<' to its "/>". Returns the new length. */
+size_t text_remove_elements(char *text, size_t length, const char *needle) {
+    char *found;
+    while ((found = (char *)text_find(text, length, needle)) != NULL) {
+        char *start = found;
+        while (start > text && *start != '<') --start;
+        const char *end = text_find(found, length - (size_t)(found - text), "/>");
+        if (*start != '<' || !end) {
+            break;
+        }
+        end += 2;
+        memory_copy(start, end, length - (size_t)(end - text)); // copies upward from the start: overlap is fine
+        length -= (size_t)(end - start);
+        text[length] = 0;
+    }
+    return length;
+}
+
 static int memory_read_fault(EXCEPTION_POINTERS *exception) {
     const EXCEPTION_RECORD *record = exception->ExceptionRecord;
     DWORD code = record->ExceptionCode;

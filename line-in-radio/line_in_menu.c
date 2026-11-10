@@ -7,15 +7,14 @@
    (extra-options/features/video_options.c): the page's XAML gets two SpinnerControls when the game
    loads it, and their bindings are properties registered on the Audio page's type.
 
-   The XAML comes through the game's resource call at RESOURCE_CALL, which Extra Options may already
-   send to its own thunk. The loader loads mods by name, so Extra Options has patched (and checked)
-   that call before this runs; this sends the call to its own thunk, which calls whichever target the
-   call had. Extra Options then edits the XAML first, and these rows go in after it, with an LI_ prefix
-   Extra Options doesn't look for. */
+   The XAML comes through a game function, hooked at its entry: Forza Horizon 2's GET_RESOURCE and
+   Forza Horizon 3's FH3_LOAD_PAGE. Extra Options only redirects the calls to them, so neither mod
+   touches the other's bytes, whichever of the two loads first (their file names decide that, and
+   people rename files). These rows go in first, then Extra Options edits the page around them; the
+   LI_ prefix is one it doesn't look for. */
 
 enum {
-    RESOURCE_CALL = 0x16ebb37,   // call GetResource on the UIRenderer LoadComponent path
-    GET_RESOURCE = 0xaabec0,
+    GET_RESOURCE = 0xaabec0,     // the game's 86 callers read every kind of file through it
     ALLOCATE = 0x3229c0,
     FREE = 0x31c7b0,
     OBJECT_INIT = 0x143eb80,
@@ -33,6 +32,24 @@ enum {
     PROPERTY_CHANGED = 0xcf9c60,
     AUDIO_TYPE_INIT = 0xc803c0,
     AUDIO_TYPE_REGISTRY = 0x35107b0,
+
+    FH3_LOAD_PAGE = 0x21dd6c0,   // void(loader): loader+0x38 is the file's buffer
+    FH3_MAKE_BUFFER = 0x208f320,
+    FH3_ALLOCATE = 0x1edbd00,
+    FH3_DELETE_OBJECT = 0x31eb20,
+    FH3_MAKE_LIST = 0x110d5c0,
+    FH3_ITEM_TYPE = 0x127ba60,
+    FH3_ALLOCATE_TYPED = 0x1f72ce0,
+    FH3_ITEM_INIT = 0x2120730,
+    FH3_ITEM_VTABLE = 0x44a7b80, // what the Audio page's own option lists hold
+    FH3_MAKE_LABEL = 0x1214480,
+    FH3_INT_PROPERTY = 0x13b78e0,        // AudioPreset
+    FH3_COLLECTION_PROPERTY = 0x13b77e0, // AudioPresetOptions
+    FH3_AUDIO_TYPE_INIT = 0x13a9e90,
+    FH3_AUDIO_TYPE = 0x1391f00,
+    FH3_REGISTER_PROPERTY = 0x1fe9210,
+    FH3_BOX_INT = 0x5592b0,
+    FH3_PROPERTY_CHANGED = 0x125ac00,
 };
 
 typedef struct {
@@ -41,7 +58,8 @@ typedef struct {
     void *getter, *setter, *unused;
     const char *name;
     void *type;
-    uint64_t flags;
+    uint64_t flags;      // Forza Horizon 3: the owning type
+    uint64_t fh3_flags;  // past the end of Forza Horizon 2's descriptor
 } NativeProperty;
 
 typedef struct NativePropertyLink {
@@ -57,7 +75,7 @@ typedef struct {
     int capacity;
 } NativeResource;
 
-_Static_assert(sizeof(NativeProperty) == 0x58, "native property descriptor");
+_Static_assert(sizeof(NativeProperty) == 0x60, "native property descriptor");
 _Static_assert(offsetof(NativeResource, bytes) == 0x28, "native resource buffer");
 
 typedef void **(*GetResource)(void *reader, void **output);
@@ -66,7 +84,9 @@ static const char *const property_names[PROPERTY_COUNT] = {"LineInSource", "Line
                                                            "LineInShuffleChoices"};
 
 static unsigned char *image;
+static int fh3;
 static GetResource next_resource;
+static void (*next_load_page)(void *loader);
 static NativeProperty properties[PROPERTY_COUNT];
 static NativePropertyLink links[PROPERTY_COUNT];
 static int registered;
@@ -78,11 +98,65 @@ static void *resource_vtable[7];
 
 static void release(void *object) {
     if (object && InterlockedDecrement((volatile LONG *)((unsigned char *)object + 0x10)) == 0) {
-        ((void (*)(void *))(image + DELETE_OBJECT))(object);
+        ((void (*)(void *))(image + (fh3 ? FH3_DELETE_OBJECT : DELETE_OBJECT)))(object);
     }
 }
 
+/* One entry of an option list, as the game's Audio page builds it (0x137e1f0): the value and its label. */
+static void *fh3_make_item(int value, const wchar_t *text) {
+    void *type = ((void *(*)(void))(image + FH3_ITEM_TYPE))();
+    unsigned char *item = ((void *(*)(size_t, void *))(image + FH3_ALLOCATE_TYPED))(0x60, type);
+    if (!item) {
+        return NULL;
+    }
+    ((void (*)(void *))(image + FH3_ITEM_INIT))(item);
+    *(void **)item = image + FH3_ITEM_VTABLE;
+    *(int *)(item + 0x50) = value;
+    unsigned char *label = NULL;
+    ((void **(*)(void **))(image + FH3_MAKE_LABEL))((void **)&label);
+    if (label) {
+        unsigned length = 0;
+        while (text[length]) ++length;
+        wchar_t *copy = ((void *(*)(size_t))(image + FH3_ALLOCATE))((length + 1) * sizeof(wchar_t));
+        if (copy) {
+            memory_copy(copy, text, (length + 1) * sizeof(wchar_t));
+            *(wchar_t **)(label + 0x28) = copy;
+            *(unsigned *)(label + 0x30) = length;
+        }
+    }
+    *(void **)(item + 0x58) = label;
+    return item;
+}
+
+static void *fh3_make_choices(const wchar_t *const *labels, unsigned count) {
+    void *list = NULL;
+    ((void (*)(void **))(image + FH3_MAKE_LIST))(&list);
+    if (!list) {
+        return NULL;
+    }
+    for (unsigned i = 0; i < count; ++i) {
+        void *item = fh3_make_item((int)i, labels[i]);
+        if (!item) {
+            release(list);
+            return NULL;
+        }
+        ((void (*)(void *, int, void *))(*(void ***)list)[0x40 / 8])(list, (int)i, item);
+        release(item);
+    }
+    return list;
+}
+
+static void property_changed(void *page, NativeProperty *property) {
+    if (fh3) {
+        ((void (*)(void *, void *))(*(void ***)page)[0x40 / 8])(page, property);
+    }
+    ((void (*)(void *, void *))(image + (fh3 ? FH3_PROPERTY_CHANGED : PROPERTY_CHANGED)))(page, property);
+}
+
 static void *make_choices(const wchar_t *const *labels, unsigned count) {
+    if (fh3) {
+        return fh3_make_choices(labels, count);
+    }
     void *type = ((void *(*)(void *))(image + COLLECTION_TYPE))(NULL);
     void *items = ((void *(*)(size_t, void *))(image + ALLOCATE_TYPED))(0x58, type);
     if (!items) {
@@ -160,7 +234,7 @@ static void **get_value(void **output, NativeProperty *property, void *page) {
         return output;
     }
     int value = property == &properties[SOURCE] ? source_index() : line_in_use_songs && line_in_shuffle;
-    return ((void **(*)(void **, const void *))(image + BOX_INT))(output, &value);
+    return ((void **(*)(void **, const void *))(image + (fh3 ? FH3_BOX_INT : BOX_INT)))(output, &value);
 }
 
 static void set_value(NativeProperty *property, void *page, void *boxed) {
@@ -180,14 +254,14 @@ static void set_value(NativeProperty *property, void *page, void *boxed) {
             line_in_select(name);
         }
         // Shuffle only means something for the Songs folder: its row shows that at once
-        ((void (*)(void *, void *))(image + PROPERTY_CHANGED))(page, &properties[SHUFFLE_CHOICES]);
-        ((void (*)(void *, void *))(image + PROPERTY_CHANGED))(page, &properties[SHUFFLE]);
+        property_changed(page, &properties[SHUFFLE_CHOICES]);
+        property_changed(page, &properties[SHUFFLE]);
     } else if (property == &properties[SHUFFLE] && line_in_use_songs && (value == 0 || value == 1)) {
         line_in_set_shuffle(value);
     } else {
         return;
     }
-    ((void (*)(void *, void *))(image + PROPERTY_CHANGED))(page, property);
+    property_changed(page, property);
 }
 
 static int register_properties(void) {
@@ -201,19 +275,31 @@ static int register_properties(void) {
     if (!shuffle_choices || !shuffle_locked) {
         return 0;
     }
-    ((void (*)(void))(image + AUDIO_TYPE_INIT))();
+    ((void (*)(void))(image + (fh3 ? FH3_AUDIO_TYPE_INIT : AUDIO_TYPE_INIT)))();
     for (unsigned i = 0; i < PROPERTY_COUNT; ++i) {
         int collection = i == SOURCE_CHOICES || i == SHUFFLE_CHOICES;
-        NativeProperty *original = ((NativeProperty * (*)(void))(image + (collection ? COLLECTION_PROPERTY : INT_PROPERTY)))();
+        NativeProperty *original =
+            ((NativeProperty * (*)(void))(image + (fh3 ? (collection ? FH3_COLLECTION_PROPERTY : FH3_INT_PROPERTY)
+                                                      : (collection ? COLLECTION_PROPERTY : INT_PROPERTY))))();
         NativeProperty *property = &properties[i];
-        ((void (*)(void *))(image + OBJECT_INIT))(property);
-        property->vtable = original->vtable;
-        memory_copy((unsigned char *)property + 0x28, (unsigned char *)original + 0x28, 0x30);
+        if (fh3) {
+            memory_copy(property, original, sizeof(*property));
+            property->unused = NULL;
+        } else {
+            ((void (*)(void *))(image + OBJECT_INIT))(property);
+            property->vtable = original->vtable;
+            memory_copy((unsigned char *)property + 0x28, (unsigned char *)original + 0x28, 0x30);
+        }
         property->name = property_names[i];
         property->getter = (void *)get_value;
         property->setter = collection ? NULL : (void *)set_value;
         links[i].property = property;
-        ((void (*)(void *, NativePropertyLink *))(image + REGISTER_PROPERTY))(image + AUDIO_TYPE_REGISTRY, &links[i]);
+        if (fh3) {
+            ((void (*)(void *, NativePropertyLink *))(image + FH3_REGISTER_PROPERTY))(
+                ((void *(*)(void *))(image + FH3_AUDIO_TYPE))(NULL), &links[i]);
+        } else {
+            ((void (*)(void *, NativePropertyLink *))(image + REGISTER_PROPERTY))(image + AUDIO_TYPE_REGISTRY, &links[i]);
+        }
     }
     registered = 1;
     return 1;
@@ -259,7 +345,12 @@ size_t line_in_menu_xaml(const char *text, size_t length, char *output, size_t c
     memory_copy(out, rows_xaml, sizeof(rows_xaml) - 1), out += sizeof(rows_xaml) - 1;
     memory_copy(out, text + b, length - b), out += length - b;
     *out = 0;
-    return total;
+    // Forza Horizon 3 only: its Groove Music Shuffle row shows even with Groove Music off, and the
+    // list ends with three empty rows that can't be focused. With these two rows, all three fall
+    // below the window, where selection can't reach them, and the down arrow never goes away. The
+    // last one stays: without it the list looks cut off, and with it everything still fits.
+    total = text_remove_elements(output, total, GROOVE_SHUFFLE_ROW);
+    return text_remove_elements(output, total, "<local:SpinnerControl Focusable=\"False\" Visibility=");
 }
 
 static void *delete_resource(NativeResource *resource, unsigned flags) {
@@ -273,8 +364,14 @@ static void *delete_resource(NativeResource *resource, unsigned flags) {
 static void **get_resource(void *reader, void **output) {
     next_resource(reader, output);
     NativeResource *original = *output;
-    if (!original || !original->bytes || original->length <= 0 || original->length > 262144 ||
-        !text_find(original->bytes, (size_t)original->length, "x:Class=\"ForzaUI.A_AudioOptions\"")) {
+    char *text;
+    int text_size;
+    unsigned char first;
+    // This runs for every file the game reads: only XAML (a '<', or a byte order mark) gets searched.
+    if (!original || !memory_read_pointer(&original->bytes, (void **)&text) || !text ||
+        !memory_read(&original->length, &text_size, sizeof(text_size)) || text_size <= 0 || text_size > 262144 ||
+        !memory_read(text, &first, sizeof(first)) || (first != '<' && first != 0xef) ||
+        !text_find(text, (size_t)text_size, "x:Class=\"ForzaUI.A_AudioOptions\"")) {
         return output;
     }
     size_t capacity = (size_t)original->length + sizeof(resources_xaml) + sizeof(rows_xaml);
@@ -304,56 +401,56 @@ static void **get_resource(void *reader, void **output) {
     return output;
 }
 
-/* A 12-byte thunk (mov rax, get_resource; jmp rax) within rel32 reach of the call: written into the
-   int3 padding between two of the game's own functions just after it (no memory of our own made
-   executable). Extra Options has filled the padding it uses by now, so that isn't picked. */
-static unsigned char *padding_thunk(unsigned char *site) {
-    for (unsigned char *at = site; at < site + 0x100000; ++at) {
-        unsigned run = 0;
-        while (run < 16 && at[run] == 0xcc) ++run;
-        if (run < 16) {
-            at += run;
-            continue;
-        }
-        unsigned char *thunk = at + 2; // an int3 stays on either side
-        static const unsigned char code[12] = {0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0};
-        uintptr_t target = (uintptr_t)get_resource;
-        DWORD old;
-        if (!VirtualProtect(thunk, sizeof(code), PAGE_EXECUTE_READWRITE, &old)) {
-            return NULL;
-        }
-        memory_copy(thunk, code, sizeof(code));
-        memory_copy(thunk + 2, &target, sizeof(target));
-        VirtualProtect(thunk, sizeof(code), old, &old);
-        FlushInstructionCache(GetCurrentProcess(), thunk, sizeof(code));
-        return thunk;
+static void fh3_load_page(void *loader) {
+    next_load_page(loader);
+    unsigned char *buffer;
+    const char *bytes;
+    int size;
+    if (!memory_read_pointer((unsigned char *)loader + 0x38, (void **)&buffer) || !buffer ||
+        !memory_read_pointer(buffer + 0x28, (void **)&bytes) || !bytes ||
+        !memory_read(buffer + 0x30, &size, sizeof(size)) || size <= 0 || size > 262144 ||
+        !text_find(bytes, (size_t)size, "x:Class=\"ForzaUI.A_AudioOptions\"")) {
+        return;
     }
-    return NULL;
+    size_t capacity = (size_t)size + sizeof(resources_xaml) + sizeof(rows_xaml);
+    unsigned char *replacement = NULL;
+    ((void **(*)(void **, unsigned))(image + FH3_MAKE_BUFFER))((void **)&replacement, (unsigned)capacity);
+    char *data;
+    if (!replacement || !memory_read_pointer(replacement + 0x28, (void **)&data)) {
+        return;
+    }
+    size_t length = line_in_menu_xaml(bytes, (size_t)size, data, capacity);
+    if (length) {
+        build_source_choices(); // the devices connected now, every time the page opens
+    }
+    if (!length || !source_choices || !register_properties()) {
+        release(replacement);
+        log_append("LINE-IN: the Audio options layout did not match; no Line-in Radio rows.\r\n");
+        return;
+    }
+    *(int *)(replacement + 0x30) = (int)length;
+    *(void **)((unsigned char *)loader + 0x38) = replacement;
+    release(buffer);
 }
 
-void line_in_menu_install(unsigned char *game_image) {
+void line_in_menu_install(unsigned char *game_image, int is_fh3) {
     image = game_image;
-    unsigned char *site = image + RESOURCE_CALL;
-    int32_t relative;
-    memory_copy(&relative, site + 1, sizeof(relative));
-    unsigned char *target = site + 5 + relative;
-    // the game's own call, or one Extra Options sent to its thunk (a mov rax / jmp rax)
-    if (site[0] != 0xe8 || (target != image + GET_RESOURCE && !(target[0] == 0x48 && target[1] == 0xb8))) {
-        log_append("LINE-IN: the Audio options call is not the expected one; no Line-in Radio rows.\r\n");
-        return;
+    fh3 = is_fh3;
+    static const unsigned char fh2_prologue[15] = {0x48, 0x83, 0xec, 0x18, 0x48, 0x8b, 0x41, 0x38,
+                                                   0xc7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00};
+    static const unsigned char fh3_prologue[19] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x48, 0x8d, 0x6c,
+                                                   0x24, 0x90, 0x48, 0x81, 0xec, 0x70, 0x01, 0x00, 0x00};
+    const unsigned char *prologue = fh3 ? fh3_prologue : fh2_prologue;
+    size_t size = fh3 ? sizeof(fh3_prologue) : sizeof(fh2_prologue);
+    unsigned char *target = image + (fh3 ? FH3_LOAD_PAGE : GET_RESOURCE);
+    void *original = memory_equal(target, prologue, size)
+                         ? install_jmp_hook(target, size, fh3 ? (void *)fh3_load_page : (void *)get_resource)
+                         : NULL;
+    if (fh3) {
+        next_load_page = original;
+    } else {
+        next_resource = original;
     }
-    unsigned char *thunk = padding_thunk(site);
-    int64_t distance = thunk ? thunk - (site + 5) : 0;
-    if (!thunk || distance != (int32_t)distance) {
-        log_append("LINE-IN: no room for the Audio options hook; no Line-in Radio rows.\r\n");
-        return;
-    }
-    next_resource = (GetResource)target;
-    relative = (int32_t)distance;
-    DWORD old;
-    VirtualProtect(site + 1, 4, PAGE_EXECUTE_READWRITE, &old);
-    memory_copy(site + 1, &relative, sizeof(relative));
-    VirtualProtect(site + 1, 4, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), site, 5);
-    log_append("LINE-IN: Audio options rows ready.\r\n");
+    log_append(original ? "LINE-IN: Audio options rows ready.\r\n"
+                        : "LINE-IN: the Audio options loader is not the expected one; no Line-in Radio rows.\r\n");
 }

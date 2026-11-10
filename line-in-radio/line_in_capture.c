@@ -325,6 +325,9 @@ void line_in_state_parse(char *text) {
             size_t n = 0;
             for (const char *c = line + 7; *c && n < sizeof(line_in_device) - 1; ++c) line_in_device[n++] = *c;
             line_in_device[n] = 0;
+            if (text_find(line_in_device, n, "Forza Horizon 2 Radio")) {
+                line_in_device[0] = 0; // the Linux output's old name: empty picks the output under its new one
+            }
         } else if (starts_with(line, "Shuffle=")) {
             line_in_shuffle = line[8] != '0';
         }

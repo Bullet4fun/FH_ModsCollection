@@ -31,6 +31,7 @@ EXPORTS
     FreeLibrary
     GetFileAttributesW
     FindFirstFileW
+RemoveDirectoryW
     FindNextFileW
     FindClose
     FlushFileBuffers

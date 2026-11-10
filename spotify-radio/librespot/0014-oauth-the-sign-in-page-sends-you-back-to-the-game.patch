@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bullet4fun <68350015+Bullet4fun@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 08:10:00 +0200
+Subject: [PATCH] oauth: the sign-in page sends you back to the game
+
+The mod starts librespot itself: there is no terminal to go back to.
+---
+diff --git a/oauth/src/lib.rs b/oauth/src/lib.rs
+index 6a504f5..8b56a60 100644
+--- a/oauth/src/lib.rs
++++ b/oauth/src/lib.rs
+@@ -401,7 +401,7 @@ impl OAuthClientBuilder {
+             redirect_uri: redirect_uri.to_string(),
+             scopes: scopes.into_iter().map(Into::into).collect(),
+             should_open_url: false,
+-            message: String::from("Go back to your terminal :)"),
++            message: String::from("Go back to your game :)"),
+         }
+     }
+ 
+@@ -492,7 +492,7 @@ pub fn get_access_token(
+     println!("Browse to: {auth_url}");
+ 
+     let code = match get_socket_address(redirect_uri) {
+-        Some(addr) => get_authcode_listener(addr, String::from("Go back to your terminal :)")),
++        Some(addr) => get_authcode_listener(addr, String::from("Go back to your game :)")),
+         _ => get_authcode_stdin(),
+     }?;
+     trace!("Exchange {code:?} for access token");
+-- 
+2.42.0.windows.2
+

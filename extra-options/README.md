@@ -41,7 +41,7 @@ support is by qiangqiang101.
 
 ## Config files
 
-Each game has its own config file in `mods\FH_ExtraOptions\`: `FH2_ExtraOptions.ini`,
+Each game has its own config file in `mods\ExtraOptions\`: `FH2_ExtraOptions.ini`,
 `FH3_ExtraOptions.ini` and `FM5_ExtraOptions.ini`.
 
 Most features are set in the game's own menus. The config file turns each feature on or off;
@@ -52,11 +52,11 @@ The custom gamerpic of the original is left out: Azimuth sets your profile pictu
 
 ## Install
 
-Unzip `FH_ExtraOptions.zip` into the Azimuth folder (where `azimuth.exe` is).
+Unzip `ExtraOptions.zip` into the Azimuth folder (where `azimuth.exe` is).
 
 Add-on mods made for Extra Options (a folder with a `mod.json`) go in `mods\Forza Horizon 2\`,
 `mods\Forza Horizon 3\` or `mods\Forza Motorsport 5\`, each with its own `loadorder.txt`. Forza Horizon 2
-add-ons still in `mods\` move there by themselves. If an older `FH2_ExtraOptions.dll` is still in `mods`, delete it: two copies would run at once. The zip brings fresh config files in `mods\FH_ExtraOptions\`, so your old settings stay in `mods\FH2_ExtraOptions\`: copy `FH2_ExtraOptions.ini` over to keep them, then delete that folder. Don't install the original release's `winmm.dll` as
+add-ons still in `mods\` move there by themselves. If an older `FH2_ExtraOptions.dll` or `FH_ExtraOptions.dll` is still in `mods`, delete it: two copies would run at once. The zip brings fresh config files in `mods\ExtraOptions\`, so your old settings stay in `mods\FH_ExtraOptions\` (or `mods\FH2_ExtraOptions\`): copy the config files over to keep them, then delete that folder. Don't install the original release's `winmm.dll` as
 well: Extra Options would run twice.
 
 ## Controls
@@ -71,7 +71,7 @@ well: Extra Options would run twice.
 | Hide the UI | F1 |
 
 Headlights, hazards, turn signals and roof are off by default: set them to 1 in the `[Vehicle]`
-section of `mods\FH_ExtraOptions\FH2_ExtraOptions.ini`.
+section of `mods\ExtraOptions\FH2_ExtraOptions.ini`.
 
 Some cars have glitched turn signals or roofs: see the original mod's
 [wiki](https://github.com/RokkuDayo/ForzaHorizon2_ExtraOptions/wiki/4.-Oddities).

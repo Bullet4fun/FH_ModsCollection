@@ -9,11 +9,21 @@
 
 AZIMUTH_MOD_GAMES(AZIMUTH_GAME_FORZA_HORIZON_2 | AZIMUTH_GAME_FORZA_HORIZON_3 | AZIMUTH_GAME_FORZA_MOTORSPORT_5);
 
-/* The mod was FH2_ExtraOptions.dll: an older install keeps its config files and settings. */
+/* The mod was FH2_ExtraOptions.dll, then FH_ExtraOptions.dll: an older install keeps its config files
+   and settings. The new folder is the loader's, so a renamed DLL gets them too. */
 static void move_old_data(const AzimuthModHost *host) {
     static wchar_t before[PATH_CAPACITY], now[PATH_CAPACITY];
-    if (path_join(before, host->mods_dir, L"FH2_ExtraOptions") && path_join(now, host->mods_dir, L"FH_ExtraOptions")) {
-        MoveFileExW(before, now, 0); // fails harmlessly: nothing to move, or already moved
+    now[0] = 0;
+    lstrcatW(now, host->data_dir);
+    int length = lstrlenW(now);
+    if (length && now[length - 1] == L'\\') {
+        now[length - 1] = 0;
+    }
+    static const wchar_t *const old_names[] = {L"FH_ExtraOptions", L"FH2_ExtraOptions"};
+    for (unsigned i = 0; i < ARRAY_COUNT(old_names); ++i) {
+        if (path_join(before, host->mods_dir, old_names[i])) {
+            MoveFileExW(before, now, 0); // fails harmlessly: nothing to move, or already moved
+        }
     }
 }
 

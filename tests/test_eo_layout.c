@@ -35,10 +35,10 @@ int main(void) {
     file(L"Weather Control\\mod.json");
     folder(L"Loose Media");
     folder(L"Loose Media\\media");
-    folder(L"FH2_SpotifyRadio");
-    file(L"FH2_SpotifyRadio.dll");
-    folder(L"FH2_LineInRadio"); // its DLL was removed: Spotify Radio replaced it
-    folder(L"FH2_LineInRadio\\Songs");
+    folder(L"FH_SpotifyRadio");
+    file(L"FH_SpotifyRadio.dll");
+    folder(L"FH_LineInRadio"); // its DLL was removed: Spotify Radio replaced it
+    folder(L"FH_LineInRadio\\Songs");
 
     layout_reset();
     layout_configure(root);
@@ -46,8 +46,8 @@ int main(void) {
     CHECK(exists(L"Forza Horizon 2\\Weather Control\\mod.json"), "an add-on with a manifest moves");
     CHECK(exists(L"Forza Horizon 2\\Loose Media\\media"), "an add-on without a manifest moves");
     CHECK(exists(L"Forza Horizon 2\\loadorder.txt"), "the load order moves");
-    CHECK(exists(L"FH2_SpotifyRadio") && !exists(L"Forza Horizon 2\\FH2_SpotifyRadio"), "a mod's data folder stays");
-    CHECK(exists(L"FH2_LineInRadio\\Songs") && !exists(L"Forza Horizon 2\\FH2_LineInRadio"),
+    CHECK(exists(L"FH_SpotifyRadio") && !exists(L"Forza Horizon 2\\FH_SpotifyRadio"), "a mod's data folder stays");
+    CHECK(exists(L"FH_LineInRadio\\Songs") && !exists(L"Forza Horizon 2\\FH_LineInRadio"),
           "a removed mod's data folder stays");
 
     // only loader mods in mods\: their names must not end up in the add-on folder
@@ -55,8 +55,8 @@ int main(void) {
     CreateDirectoryW(root, NULL);
     CreateDirectoryW(at(L""), NULL);
     file(L"loadorder.txt");
-    folder(L"FH2_SpotifyRadio");
-    file(L"FH2_SpotifyRadio.dll");
+    folder(L"FH_SpotifyRadio");
+    file(L"FH_SpotifyRadio.dll");
     layout_reset();
     layout_configure(root);
     CHECK(addons_layout_prepare(), "the layout without add-ons is prepared");

@@ -3,8 +3,8 @@
 Shows "Playing <the game>" with the play time on your Discord profile, for every game Azimuth runs:
 Forza Horizon 2, Fast & Furious, Forza Horizon 3, Forza Motorsport 5 and Forza Motorsport 6.
 
-Install: put `FH_DiscordRPC.dll` in the `mods` folder next to `azimuth.exe`. No settings. It only talks to the Discord app
-on your PC. If an older `FH2_DiscordRPC.dll` is still in `mods`, delete it: two copies would run at once.
+Install: put `DiscordRPC.dll` in the `mods` folder next to `azimuth.exe`. No settings. It only talks to the Discord app
+on your PC. If an older `FH2_DiscordRPC.dll` or `FH_DiscordRPC.dll` is still in `mods`, delete it: two copies would run at once.
 
 ## Linux (Proton)
 

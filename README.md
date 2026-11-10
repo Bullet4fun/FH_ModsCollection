@@ -6,8 +6,8 @@ Mods for the Forza titles released on the Xbox One, on Azimuth 1.0.3 or newer. T
 | Mod | What it does |
 |---|---|
 | [Extra Options](extra-options/README.md) | RokkuDayo's Extra Options for FH2, FH3 and FM5: car change anywhere, autodrive, drift camera, FOV, unlocks and more |
-| [Spotify Radio](spotify-radio/README.md) | Spotify as an in-game radio station (FH2 only, Spotify Premium only) |
-| [Line-in Radio](line-in-radio/README.md) | Your own music files, or any player through a virtual cable, as the in-game radio (FH2 only) |
+| [Spotify Radio](spotify-radio/README.md) | Spotify as an in-game radio station (FH2 and FH3, Spotify Premium only) |
+| [Line-in Radio](line-in-radio/README.md) | Your own music files, or any player through a virtual cable, as the in-game radio (FH2 and FH3) |
 | [Discord RPC](discord-rpc/README.md) | Discord Rich Presence, in every game Azimuth runs (FH2, F&F, FH3, FM5, FM6) |
 
 ## Install
@@ -20,10 +20,10 @@ turn it off.
 Python 3.10+ and [Zig 0.15.2](https://ziglang.org/download/):
 
 ```text
-python build.py path\to\zig.exe --mod     --output FH_ExtraOptions.dll
-python build.py path\to\zig.exe --spotify --output FH2_SpotifyRadio.dll
-python build.py path\to\zig.exe --line-in --output FH2_LineInRadio.dll
-python build.py path\to\zig.exe --discord --output FH_DiscordRPC.dll
+python build.py path\to\zig.exe --mod     --output ExtraOptions.dll
+python build.py path\to\zig.exe --spotify --output FH_SpotifyRadio.dll
+python build.py path\to\zig.exe --line-in --output FH_LineInRadio.dll
+python build.py path\to\zig.exe --discord --output DiscordRPC.dll
 python tests\run.py path\to\zig.exe
 ```
 

@@ -5,7 +5,7 @@
 
 /* Line-in Radio's audio sources, both 44.1 kHz 16-bit stereo into the bridge's pipe:
    - Source = Songs: the files in the mod's Songs\ folder (line_in_songs.c);
-   - Source = Device: the sound device named in FH2_LineInRadio.ini, captured with WASAPI (an output
+   - Source = Device: the sound device named in FH_LineInRadio.ini, captured with WASAPI (an output
      device through loopback, an input device directly). */
 
 extern char line_in_device[256]; // [Audio] Device: part of the device's name, UTF-8; empty = off
@@ -16,7 +16,7 @@ extern int line_in_shuffle;      // [Audio] Shuffle: 1 = random order (default),
 int line_in_name_matches(const char *name, const char *wanted);
 // 1: linux_radio.py runs beside the game (Linux, Proton): it makes LINE_IN_LINUX_DEVICE and reads MPRIS.
 int line_in_linux_helper(void);
-#define LINE_IN_LINUX_DEVICE "Forza Horizon 2 Radio"
+#define LINE_IN_LINUX_DEVICE "Forza Horizon Radio"
 
 // Starts the source picked in the menu (source.txt), else the config's. Owns `pipe_write`; folder: the mod's.
 int line_in_capture_start(HANDLE pipe_write, const wchar_t *folder);
@@ -26,7 +26,9 @@ void line_in_select(const char *device);
 void line_in_set_shuffle(int on);
 unsigned line_in_list_devices(wchar_t names[][128], unsigned capacity);
 void line_in_state_parse(char *text); // source.txt's lines
-void line_in_menu_install(unsigned char *game_image);
+void line_in_menu_install(unsigned char *game_image, int is_fh3);
+void *install_jmp_hook(unsigned char *target, size_t copy_len, void *hook); // spotify_bridge.c
+#define GROOVE_SHUFFLE_ROW "Tag=\"{StaticResource A_DataItem_XboxMusicShuffle}\""
 size_t line_in_menu_xaml(const char *text, size_t length, char *output, size_t capacity);
 
 int line_in_songs_start(HANDLE pipe_write, const wchar_t *folder);

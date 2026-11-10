@@ -1,4 +1,5 @@
 #include "shared/boot_diagnostics.h"
+#include "shared/config_value.h"
 #include "fm5/fm5.h"
 #include "fm5/fm5_patch.h"
 #include "fm5/fm5_mods.h"
@@ -64,9 +65,10 @@ static int option(const wchar_t *section, const wchar_t *key) {
     int default_value=CompareStringOrdinal(key,-1,L"E3StartScreen",-1,FALSE)!=CSTR_EQUAL;
     wchar_t value[16];
     GetPrivateProfileStringW(section, key, L"", value, ARRAY_COUNT(value), ini_path);
+    config_value_trim(value);
     /* Accept the previous FM5 spelling while publishing FH2's canonical name. */
     if(!value[0] && CompareStringOrdinal(key,-1,L"EnableMediaOverrides",-1,FALSE)==CSTR_EQUAL)
-        GetPrivateProfileStringW(section,L"MediaOverrides",L"1",value,ARRAY_COUNT(value),ini_path);
+        GetPrivateProfileStringW(section,L"MediaOverrides",L"1",value,ARRAY_COUNT(value),ini_path),config_value_trim(value);
     if(!value[0]){value[0]=default_value?L'1':L'0';value[1]=0;}
     if (value[0] == L'0' && !value[1]) return 0;
     if (value[0] == L'1' && !value[1]) return 1;

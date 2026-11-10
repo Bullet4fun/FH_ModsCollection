@@ -6,6 +6,7 @@ int memory_equal(const void *left, const void *right, size_t size);
 size_t text_length(const char *text);
 const char *text_find(const char *text, size_t length, const char *needle);
 const char *text_find_unique(const char *text, size_t length, const char *needle);
+size_t text_remove_elements(char *text, size_t length, const char *needle);
 int text_equal_ignore_case(const char *left, const char *right);
 int memory_read(const void *address, void *output, size_t size);
 int memory_read_pointer(const void *address, void **value);
