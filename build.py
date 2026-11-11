@@ -98,7 +98,7 @@ LINE_IN_SOURCES = ["line-in-radio/line_in_capture.c", "line-in-radio/line_in_son
                    "line-in-radio/line_in_menu.c",
                    *SPOTIFY_SOURCES]
 # FM5 Split-Screen: a guest player for split-screen, through wrapped WinRT factories
-SPLIT_SCREEN_SOURCES = ["fm5-split-screen/split_screen_mod.c", "fm5-split-screen/players.c", "fm5-split-screen/wrap.c",
+SPLIT_SCREEN_SOURCES = ["fm5-split-screen/split_screen_mod.c", "fm5-split-screen/players.c", "fm5-split-screen/wrap.c", "fm5-split-screen/name_prompt.c",
                         "common/mod_log.c", "common/support.c"]
 INCLUDE_DIRS = ["common", "sdk", "extra-options", "spotify-radio", "discord-rpc"]
 SPOTIFY_VERSION = "1.5.0"

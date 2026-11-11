@@ -131,10 +131,16 @@ static HRESULT pads_all(FakeFace *self, void **out) {
     *out = &list->face[0];
     return S_OK;
 }
+static INT64 next_token = 1;
 static HRESULT add_event(FakeFace *self, void *handler, INT64 *token) {
     ((ULONG (*)(void *))(*(void ***)handler)[1])(handler);
     self->owner->handler = handler;
-    *token = 1;
+    *token = next_token++;
+    return S_OK;
+}
+static HRESULT remove_event(FakeFace *self, INT64 token) {
+    (void)self;
+    (void)token;
     return S_OK;
 }
 static HRESULT args_controller(FakeFace *self, void **out) {
@@ -156,14 +162,50 @@ static void fake_init(Fake *fake, void **face0, void **face1) {
 }
 
 /* The game's handler: records the controller it gets and that controller's user. */
-static void *handled_user;
+static void *handled_user, *handled_controller, *handled_sender;
+static int handled_count;
 static HRESULT handler_invoke(void *self, void *sender, void *event_args) {
     (void)self;
-    (void)sender;
     void *controller = NULL;
     ((HRESULT (*)(void *, void **))(*(void ***)event_args)[6])(event_args, &controller);
     ((HRESULT (*)(void *, void **))(*(void ***)controller)[8])(controller, &handled_user);
+    ((ULONG (*)(void *))(*(void ***)handled_user)[2])(handled_user);
     ((ULONG (*)(void *))(*(void ***)controller)[2])(controller);
+    handled_controller = controller;
+    handled_sender = sender;
+    ++handled_count;
+    return S_OK;
+}
+
+/* The name prompt: checks the default and answers a name, or skips. */
+static int prompt_count, prompt_skip, prompt_default_ok;
+static int fake_prompt(wchar_t *name, unsigned capacity) {
+    ++prompt_count;
+    prompt_default_ok = capacity >= 6 && name[0] == L'G' && name[5] == 0;
+    if (prompt_skip) {
+        return 0;
+    }
+    name[0] = L'V', name[1] = L'a', name[2] = L'n', name[3] = L'y', name[4] = L'a', name[5] = 0;
+    return 1;
+}
+static int string_is(HSTRING string, const wchar_t *text) {
+    UINT32 length = 0;
+    const wchar_t *raw = WindowsGetStringRawBuffer(string, &length);
+    UINT32 n = 0;
+    while (text[n]) {
+        ++n;
+    }
+    for (UINT32 i = 0; i < n && i < length; ++i) {
+        if (raw[i] != text[i]) {
+            return 0;
+        }
+    }
+    return length == n;
+}
+static Fake display;
+static HRESULT user_display(FakeFace *self, void **out) {
+    (void)self;
+    *out = &display.face[0]; // as Azimuth: its own object
     return S_OK;
 }
 static Fake handler;
@@ -179,6 +221,7 @@ int main(void) {
     user_vt[6] = (void *)user_id;
     user_vt[10] = (void *)user_flag;
     user_vt[14] = user_vt[15] = (void *)user_string;
+    user_vt[9] = (void *)user_display;
     statics_vt[6] = (void *)statics_count;
     statics_vt[9] = (void *)statics_users;
     statics_vt[14] = (void *)statics_by_id;
@@ -189,11 +232,13 @@ int main(void) {
     controller_vt[7] = (void *)pad_type;
     controller_vt[8] = (void *)pad_user;
     pad_statics_vt[6] = (void *)pads_all;
-    pad_statics_vt[7] = (void *)add_event;
+    pad_statics_vt[7] = pad_statics_vt[9] = (void *)add_event;
+    pad_statics_vt[8] = pad_statics_vt[10] = (void *)remove_event;
     args_vt[6] = (void *)args_controller;
     reading_vt[7] = (void *)reading_get_buttons;
     gamepad_vt[7] = (void *)pad_reading;
     fake_init(&reading, reading_vt, NULL);
+    fake_init(&display, base_vtable, NULL);
     handler_vt[3] = (void *)handler_invoke;
     fake_init(&user, user_vt, NULL);
     fake_init(&users, list_vt, NULL);
@@ -324,29 +369,72 @@ int main(void) {
     for (int i = 0; i < 2; ++i) {
         CALL(controllers[i], 8, HRESULT (*)(void *, void **))(controllers[i], &owners[i]);
     }
+    CHECK(owners[0] == &user.face[0] && owners[1] == &user.face[0]); // the second waits for the guest's name
+    user.refs -= 2;
+
+    // the game's controller events: the mod keeps its Added and Removed handlers
+    void *controllers_statics = players_factory(L"Windows.Xbox.Input.Controller", &iid, &controller_statics.face[0]);
+    INT64 added_token = 0, removed_token = 0;
+    CALL(controllers_statics, 7, HRESULT (*)(void *, void *, INT64 *))(controllers_statics, &handler.face[0], &added_token);
+    void *added = controller_statics.handler;
+    CALL(controllers_statics, 9, HRESULT (*)(void *, void *, INT64 *))(controllers_statics, &handler.face[0], &removed_token);
+    void *removed = controller_statics.handler;
+    CHECK(added && removed && added != removed && added != &handler.face[0]);
+
+    // the name prompt: the pad joins as the guest, and the game sees it leave and come back
+    players_tick(fake_prompt);
+    CHECK(prompt_count == 1 && prompt_default_ok);
+    CHECK(handled_count == 2 && handled_controller == controllers[1] && handled_sender == controllers_statics);
+    CHECK(handled_user == guest); // asked again on the way back: now the guest's
+    for (int i = 0; i < 2; ++i) {
+        CALL(controllers[i], 8, HRESULT (*)(void *, void **))(controllers[i], &owners[i]);
+    }
     CHECK(owners[0] == &user.face[0] && owners[1] == guest);
     wrap_release(owners[1]);
     --user.refs;
+    players_tick(fake_prompt);
+    CHECK(prompt_count == 1); // nobody else waits
+    // the guest's name, in every name slot
+    void *info = NULL;
+    CHECK(CALL(guest, 9, HRESULT (*)(void *, void **))(guest, &info) == S_OK && info && info != &display.face[0]);
+    const int name_slots[] = {6, 8, 9};
+    for (int i = 0; i < 3; ++i) {
+        HSTRING name = NULL;
+        CHECK(CALL(info, name_slots[i], HRESULT (*)(void *, HSTRING *))(info, &name) == S_OK && string_is(name, L"Vanya"));
+        WindowsDeleteString(name);
+    }
+    wrap_release(info);
+
+    // the same device is the same object for the game, through any list or event
+    void *again = NULL;
+    CALL(gamepads, 6, HRESULT (*)(void *, UINT32, void **))(gamepads, 1, &again);
+    CHECK(again == pad_objects[1]);
+    wrap_release(again);
     for (int i = 0; i < 2; ++i) {
         wrap_release(controllers[i]);
         wrap_release(pad_objects[i]);
-        CHECK(pads[i].refs == 1); // each wrapper gave back both of its faces' references
+        CHECK(pads[i].refs == 3); // the mod's own wrapper (both faces) keeps the device while it is plugged in
     }
     wrap_release(gamepads);
     CHECK(pad_list.refs == 1);
 
-    // controller events: the game's handler sees the second pad paired with the guest
-    void *controllers_statics = players_factory(L"Windows.Xbox.Input.Controller", &iid, &controller_statics.face[0]);
-    INT64 token = 0;
-    CALL(controllers_statics, 7, HRESULT (*)(void *, void *, INT64 *))(controllers_statics, &handler.face[0], &token);
-    CHECK(token == 1 && controller_statics.handler && controller_statics.handler != &handler.face[0]);
-    CALL(controller_statics.handler, 3, HRESULT (*)(void *, void *, void *))(controller_statics.handler, NULL, &args.face[0]);
-    CHECK(handled_user == guest);
-    wrap_release(handled_user);
-    CHECK(args.refs == 1 && pads[1].refs == 1);
-    LONG handler_refs = handler.refs;
-    wrap_release(controller_statics.handler); // Azimuth removing the event
-    CHECK(handler.refs == handler_refs - 1);
+    // Azimuth's events: unplugging forgets the guest's pad, plugging it in asks the name again
+    handled_count = 0;
+    CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    CHECK(handled_count == 1 && handled_user == guest);
+    CHECK(pads[1].refs == 1 && args.refs == 1); // the mod let go of the device
+    CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
+    CHECK(handled_count == 2 && handled_user == &user.face[0]); // not named yet
+    prompt_skip = 1;
+    players_tick(fake_prompt);
+    CHECK(prompt_count == 2 && handled_count == 4 && handled_user == guest);
+    info = NULL;
+    CALL(guest, 9, HRESULT (*)(void *, void **))(guest, &info);
+    HSTRING skipped = NULL;
+    CALL(info, 6, HRESULT (*)(void *, HSTRING *))(info, &skipped);
+    CHECK(string_is(skipped, L"Guest")); // skipped: the default name
+    WindowsDeleteString(skipped);
+    wrap_release(info);
 
     void *all = NULL;
     CALL(controllers_statics, 6, HRESULT (*)(void *, void **))(controllers_statics, &all);
@@ -362,6 +450,14 @@ int main(void) {
     wrap_release(gamepad);
     wrap_release(only);
     wrap_release(all);
+
+    // removing the game's handlers lets go of them
+    LONG handler_refs = handler.refs;
+    CALL(controllers_statics, 8, HRESULT (*)(void *, INT64))(controllers_statics, added_token);
+    CALL(controllers_statics, 10, HRESULT (*)(void *, INT64))(controllers_statics, removed_token);
+    wrap_release(added); // Azimuth's references
+    wrap_release(removed);
+    CHECK(handler.refs == handler_refs - 2);
     wrap_release(guest);
     wrap_report();
 

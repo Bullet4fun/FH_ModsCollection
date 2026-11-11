@@ -9,6 +9,7 @@ enum {
     USER_STATICS_USERS = 9,
     USER_STATICS_BY_ID = 14,
     USER_ID = 6,
+    USER_DISPLAY_INFO = 9,
     USER_IS_GUEST = 10,
     USER_XBOX_HASH = 14,
     USER_XBOX_ID = 15,
@@ -25,6 +26,11 @@ enum {
     CONTROLLER_ADDED = 7,       /* add_ControllerAdded; 9 ControllerRemoved, 11 ControllerPairingChanged */
     CONTROLLER_REMOVED = 9,
     CONTROLLER_PAIRING = 11,
+    CONTROLLER_ADDED_REMOVE = 8, /* remove_ControllerAdded(token); 10 remove_ControllerRemoved */
+    CONTROLLER_REMOVED_REMOVE = 10,
+    DISPLAY_NAME = 6, /* IUserDisplayInfo: 6, 8 and 9 all answer the gamertag in Azimuth */
+    DISPLAY_NAME_2 = 8,
+    DISPLAY_NAME_3 = 9,
     DELEGATE_INVOKE = 3,
     EVENT_CONTROLLER = 6, /* the event arguments' Controller */
 };
@@ -45,10 +51,12 @@ typedef HRESULT (*IndexOfFn)(void *, void *, UINT32 *, unsigned char *);
 typedef HRESULT (*GetManyFn)(void *, UINT32, UINT32, void **, UINT32 *);
 typedef HRESULT (*AddEventFn)(void *, void *, INT64 *);
 typedef HRESULT (*InvokeFn)(void *, void *, void *);
+typedef HRESULT (*RemoveEventFn)(void *, INT64);
 
 static void *user_statics_vt[WRAP_SLOTS], *user_view_vt[WRAP_SLOTS], *guest_vt[WRAP_SLOTS];
 static void *controller_statics_vt[WRAP_SLOTS], *gamepad_statics_vt[WRAP_SLOTS], *pad_view_vt[WRAP_SLOTS];
 static void *pad_vt[WRAP_SLOTS], *pad_controller_vt[WRAP_SLOTS], *delegate_vt[WRAP_SLOTS], *event_args_vt[WRAP_SLOTS];
+static void *display_info_vt[WRAP_SLOTS];
 
 static WrapKind kind_user_statics = {.name = "UserStatics", .primary = user_statics_vt};
 static WrapKind kind_user_view = {.name = "Users", .primary = user_view_vt};
@@ -60,6 +68,7 @@ static const struct WrapInterface pad_interfaces[] = {{&IID_IController, pad_con
 static WrapKind kind_pad = {.name = "Pad", .primary = pad_vt, .interfaces = pad_interfaces, .interface_count = 2};
 static WrapKind kind_delegate = {.name = "ControllerEventHandler", .primary = delegate_vt};
 static WrapKind kind_event_args = {.name = "ControllerEventArgs", .primary = event_args_vt};
+static WrapKind kind_display_info = {.name = "GuestDisplayInfo", .primary = display_info_vt};
 
 static SRWLOCK lock = SRWLOCK_INIT;
 static void *const *string_create, *const *string_buffer, *const *string_delete;
@@ -69,6 +78,52 @@ static UINT64 pad_ids[8];  /* device ids seen, ascending */
 static unsigned pad_count;
 static UINT64 first_pad;  /* the device that pressed A first: player 1's, all the others the guest's */
 static int first_pad_known;
+static void *controller_statics; /* the mod's wrapper: the sender of the events the mod makes */
+static void *guest_display;      /* the guest's display info wrapper, kept for the session */
+static wchar_t guest_name[16] = L"Guest";
+/* Pads the guest plays with, and pads waiting for the guest's name before they join. */
+static UINT64 joined[8], waiting[8];
+static unsigned joined_count, waiting_count;
+/* One wrapper per device while it is plugged in: the game compares controller pointers, so a pad it
+   sees again must be the very object it already holds. */
+static struct {
+    UINT64 id;
+    void *wrapper;
+} pads[8];
+static unsigned pads_count;
+/* The game's ControllerAdded and ControllerRemoved handlers (the mod's wrappers around them). */
+static struct {
+    INT64 token;
+    void *handler;
+    unsigned slot;
+} handlers[16];
+static unsigned handlers_count;
+
+static int id_in(const UINT64 *ids, unsigned count, UINT64 id) {
+    for (unsigned i = 0; i < count; ++i) {
+        if (ids[i] == id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void id_drop(UINT64 *ids, unsigned *count, UINT64 id) {
+    for (unsigned i = 0; i < *count; ++i) {
+        if (ids[i] == id) {
+            ids[i] = ids[--*count];
+            --i;
+        }
+    }
+}
+
+/* Under lock: a pad other than player 1's that is not the guest's yet waits for the name prompt. */
+static void wait_to_join(UINT64 id) {
+    if (first_pad_known && id != first_pad && !id_in(joined, joined_count, id) &&
+        !id_in(waiting, waiting_count, id) && waiting_count < ARRAY_COUNT(waiting)) {
+        waiting[waiting_count++] = id;
+    }
+}
 
 static void log_text(const char *a, const char *b) {
     WrapLine line;
@@ -263,12 +318,126 @@ static HRESULT guest_string(WrapFace *self, unsigned slot, void **out) {
     return ((HRESULT (*)(const wchar_t *, UINT32, void **))*string_create)(buffer, n, out);
 }
 
+/* The guest's name, from the prompt: every name slot of its display info. */
+static HRESULT display_name(WrapFace *self, unsigned slot, void **out) {
+    wrap_note(self, slot);
+    wchar_t name[ARRAY_COUNT(guest_name)];
+    AcquireSRWLockShared(&lock);
+    memory_copy(name, guest_name, sizeof(name));
+    ReleaseSRWLockShared(&lock);
+    UINT32 n = 0;
+    while (name[n]) {
+        ++n;
+    }
+    if (out && string_create && *string_create &&
+        SUCCEEDED(((HRESULT (*)(const wchar_t *, UINT32, void **))*string_create)(name, n, out))) {
+        return S_OK;
+    }
+    return WRAP_METHOD(self->inner, slot, GetPointerFn)(self->inner, out);
+}
+static HRESULT display_name_1(WrapFace *self, void **out) { return display_name(self, DISPLAY_NAME, out); }
+static HRESULT display_name_2(WrapFace *self, void **out) { return display_name(self, DISPLAY_NAME_2, out); }
+static HRESULT display_name_3(WrapFace *self, void **out) { return display_name(self, DISPLAY_NAME_3, out); }
+
+static HRESULT guest_display_info(WrapFace *self, void **out) {
+    wrap_note(self, USER_DISPLAY_INFO);
+    void *info = NULL;
+    HRESULT result = WRAP_METHOD(self->inner, USER_DISPLAY_INFO, GetPointerFn)(self->inner, &info);
+    if (FAILED(result) || !info || !out) {
+        if (out) {
+            *out = info;
+        }
+        return result;
+    }
+    /* Azimuth hands out its own object (whether with a reference is unknown): never released here,
+       one wrapper on it for the session. shortcut: leaks one reference if Azimuth added one. */
+    AcquireSRWLockExclusive(&lock);
+    if (!guest_display) {
+        wrap_add_ref(info);
+        guest_display = wrap_new(&kind_display_info, info, NULL, 0);
+    }
+    void *wrapper = guest_display;
+    if (wrapper) {
+        wrap_add_ref(wrapper);
+    }
+    ReleaseSRWLockExclusive(&lock);
+    *out = wrapper ? wrapper : info;
+    return result;
+}
+
 static HRESULT guest_xbox_hash(WrapFace *self, void **out) { return guest_string(self, USER_XBOX_HASH, out); }
 static HRESULT guest_xbox_id(WrapFace *self, void **out) { return guest_string(self, USER_XBOX_ID, out); }
 
-/* Pads: the second one's user is the guest */
+/* Pads */
+static int device_id(void *object, int controller, UINT64 *id) {
+    if (controller) {
+        return SUCCEEDED(WRAP_METHOD(object, CONTROLLER_ID, GetU64Fn)(object, id));
+    }
+    void *as_controller = NULL;
+    if (FAILED(WRAP_METHOD(object, 0, QueryFn)(object, &IID_IController, &as_controller)) || !as_controller) {
+        return 0;
+    }
+    int known = SUCCEEDED(WRAP_METHOD(as_controller, CONTROLLER_ID, GetU64Fn)(as_controller, id));
+    WRAP_METHOD(as_controller, 2, ULONG (*)(void *))(as_controller);
+    return known;
+}
+
+/* The device's wrapper, as the interface inner is (a controller or a gamepad). Takes inner's reference. */
 static void *pad_wrap(void *inner, int controller) {
-    return wrap_new(&kind_pad, inner, controller ? pad_controller_vt : pad_vt, 0);
+    void **vtable = controller ? pad_controller_vt : pad_vt;
+    UINT64 id = 0;
+    if (!device_id(inner, controller, &id)) {
+        return wrap_new(&kind_pad, inner, vtable, 0);
+    }
+    void *wrapper = NULL;
+    AcquireSRWLockExclusive(&lock);
+    for (unsigned i = 0; i < pads_count && !wrapper; ++i) {
+        if (pads[i].id == id) {
+            wrapper = pads[i].wrapper;
+            wrap_add_ref(wrapper);
+        }
+    }
+    if (!wrapper && pads_count < ARRAY_COUNT(pads)) {
+        wrapper = wrap_new(&kind_pad, inner, vtable, 0);
+        if (wrapper) {
+            wrap_add_ref(wrapper); // the table's
+            pads[pads_count].id = id;
+            pads[pads_count++].wrapper = wrapper;
+        }
+        ReleaseSRWLockExclusive(&lock);
+        return wrapper;
+    }
+    ReleaseSRWLockExclusive(&lock);
+    if (!wrapper) { // more devices than the table holds
+        return wrap_new(&kind_pad, inner, vtable, 0);
+    }
+    void *face = NULL;
+    WRAP_METHOD(wrapper, 0, QueryFn)(wrapper, controller ? &IID_IController : &IID_IGamepad, &face);
+    wrap_release(wrapper);
+    if (!face) {
+        return wrap_new(&kind_pad, inner, vtable, 0);
+    }
+    WRAP_METHOD(inner, 2, ULONG (*)(void *))(inner);
+    return face;
+}
+
+/* A pad that left: when it comes back it gets the name prompt again. */
+static void pad_gone(UINT64 id) {
+    void *wrapper = NULL;
+    AcquireSRWLockExclusive(&lock);
+    id_drop(joined, &joined_count, id);
+    id_drop(waiting, &waiting_count, id);
+    for (unsigned i = 0; i < pads_count; ++i) {
+        if (pads[i].id == id) {
+            wrapper = pads[i].wrapper;
+            pads[i] = pads[--pads_count];
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&lock);
+    if (wrapper) {
+        wrap_release(wrapper);
+    }
 }
 
 /* Until a pad presses A every pad is user 1's, as in Azimuth: the game signs in whoever starts it. */
@@ -276,7 +445,8 @@ static HRESULT pad_user(WrapFace *self, void **out) {
     wrap_note(self, CONTROLLER_USER);
     UINT64 id = 0;
     if (out && SUCCEEDED(WRAP_METHOD(self->inner, CONTROLLER_ID, GetU64Fn)(self->inner, &id)) &&
-        pad_index(id) >= 0 && first_pad_known && id != first_pad && (*out = guest_ref()) != NULL) {
+        pad_index(id) >= 0 && first_pad_known && id != first_pad && id_in(joined, joined_count, id) &&
+        (*out = guest_ref()) != NULL) {
         static volatile LONG logged;
         if (!InterlockedExchange(&logged, 1)) {
             WrapLine line;
@@ -354,6 +524,9 @@ static HRESULT pad_reading(WrapFace *self, void **out) {
         } else if (pad_buttons[i].a_was_up && !first_pad_known) {
             first_pad = id;
             first_pad_known = first = 1;
+            for (unsigned j = 0; j < pads_count; ++j) {
+                wait_to_join(pads[j].id); // pads already plugged in: the game asked whose they are at boot
+            }
         }
     }
     ReleaseSRWLockExclusive(&lock);
@@ -366,7 +539,7 @@ static HRESULT pad_reading(WrapFace *self, void **out) {
         line.length = 0;
         line_add(&line, "PLAYERS: the pad with device id ");
         line_add_number(&line, id);
-        line_add(&line, " pressed A first: it is player 1, any other pad is the guest's");
+        line_add(&line, " pressed A first: it is player 1, any other pad joins as the guest");
         line_log(&line);
     }
     return result;
@@ -417,9 +590,19 @@ static HRESULT controller_event_add(WrapFace *self, unsigned slot, void *handler
     void *wrapped = NULL;
     if (handler) {
         wrap_add_ref(handler); // works on any COM object: slot 1 is AddRef
-        wrapped = wrap_new(&kind_delegate, handler, NULL, 0);
+        wrapped = wrap_new(&kind_delegate, handler, NULL, slot); // data: which event it handles
     }
     HRESULT result = WRAP_METHOD(self->inner, slot, AddEventFn)(self->inner, wrapped ? wrapped : handler, token);
+    if (wrapped && SUCCEEDED(result) && token && slot != CONTROLLER_PAIRING) {
+        AcquireSRWLockExclusive(&lock);
+        if (handlers_count < ARRAY_COUNT(handlers)) {
+            handlers[handlers_count].token = *token;
+            handlers[handlers_count].slot = slot;
+            handlers[handlers_count++].handler = wrapped;
+            wrapped = NULL; // the list keeps this reference
+        }
+        ReleaseSRWLockExclusive(&lock);
+    }
     if (wrapped) {
         wrap_release(wrapped); // the event keeps its own reference
     }
@@ -436,8 +619,53 @@ static HRESULT controller_pairing(WrapFace *self, void *handler, INT64 *token) {
     return controller_event_add(self, CONTROLLER_PAIRING, handler, token);
 }
 
+static HRESULT controller_event_remove(WrapFace *self, unsigned slot, INT64 token) {
+    wrap_note(self, slot);
+    HRESULT result = WRAP_METHOD(self->inner, slot, RemoveEventFn)(self->inner, token);
+    void *dropped = NULL;
+    AcquireSRWLockExclusive(&lock);
+    for (unsigned i = 0; i < handlers_count; ++i) {
+        if (handlers[i].token == token && handlers[i].slot == slot - 1) { // add is the slot before remove
+            dropped = handlers[i].handler;
+            handlers[i] = handlers[--handlers_count];
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&lock);
+    if (dropped) {
+        wrap_release(dropped);
+    }
+    return result;
+}
+static HRESULT controller_added_remove(WrapFace *self, INT64 token) {
+    return controller_event_remove(self, CONTROLLER_ADDED_REMOVE, token);
+}
+static HRESULT controller_removed_remove(WrapFace *self, INT64 token) {
+    return controller_event_remove(self, CONTROLLER_REMOVED_REMOVE, token);
+}
+
+/* The device id of a ControllerAdded or ControllerRemoved event, 0 for any other event. */
+static int event_device(WrapFace *self, void *args, UINT64 *id) {
+    unsigned event = (unsigned)self->owner->data;
+    void *controller = NULL;
+    if (!args || (event != CONTROLLER_ADDED && event != CONTROLLER_REMOVED) ||
+        FAILED(WRAP_METHOD(args, EVENT_CONTROLLER, GetPointerFn)(args, &controller)) || !controller) {
+        return 0;
+    }
+    int known = device_id(controller, 1, id);
+    WRAP_METHOD(controller, 2, ULONG (*)(void *))(controller);
+    return known;
+}
+
 static HRESULT delegate_invoke(WrapFace *self, void *sender, void *args) {
     wrap_note(self, DELEGATE_INVOKE);
+    UINT64 id = 0;
+    int device = event_device(self, args, &id);
+    if (device && self->owner->data == CONTROLLER_ADDED) {
+        AcquireSRWLockExclusive(&lock);
+        wait_to_join(id); // plugged in after player 1 chose: the guest's, once named
+        ReleaseSRWLockExclusive(&lock);
+    }
     void *wrapped = NULL;
     if (args) {
         wrap_add_ref(args);
@@ -446,6 +674,9 @@ static HRESULT delegate_invoke(WrapFace *self, void *sender, void *args) {
     HRESULT result = WRAP_METHOD(self->inner, DELEGATE_INVOKE, InvokeFn)(self->inner, sender, wrapped ? wrapped : args);
     if (wrapped) {
         wrap_release(wrapped);
+    }
+    if (device && self->owner->data == CONTROLLER_REMOVED) {
+        pad_gone(id); // after the game let go of the very wrapper it held
     }
     return result;
 }
@@ -458,6 +689,129 @@ static HRESULT event_controller(WrapFace *self, void **out) {
         return *out ? result : E_OUTOFMEMORY;
     }
     return result;
+}
+
+/* Event arguments the mod makes to show the game a pad again: only the controller. */
+typedef struct {
+    void **vtable;
+    volatile LONG refs;
+    void *controller;
+} PadEventArgs;
+
+static HRESULT pad_args_query(PadEventArgs *self, const GUID *iid, void **out) {
+    (void)iid; // the game only reads the controller of the arguments it gets
+    InterlockedIncrement(&self->refs);
+    *out = self;
+    return S_OK;
+}
+static ULONG pad_args_add_ref(PadEventArgs *self) { return (ULONG)InterlockedIncrement(&self->refs); }
+static ULONG pad_args_release(PadEventArgs *self) {
+    LONG refs = InterlockedDecrement(&self->refs);
+    if (!refs) {
+        wrap_release(self->controller);
+        HeapFree(GetProcessHeap(), 0, self);
+    }
+    return (ULONG)refs;
+}
+static HRESULT pad_args_iids(PadEventArgs *self, ULONG *count, GUID **iids) {
+    (void)self;
+    *count = 0;
+    *iids = NULL;
+    return S_OK;
+}
+static HRESULT pad_args_none(PadEventArgs *self, void **out) { // class name: none, and trust level: base
+    (void)self;
+    *out = NULL;
+    return S_OK;
+}
+static HRESULT pad_args_controller(PadEventArgs *self, void **out) {
+    wrap_add_ref(self->controller);
+    *out = self->controller;
+    return S_OK;
+}
+static void *pad_args_vt[] = {(void *)pad_args_query, (void *)pad_args_add_ref, (void *)pad_args_release,
+                              (void *)pad_args_iids,  (void *)pad_args_none,    (void *)pad_args_none,
+                              (void *)pad_args_controller};
+
+/* Calls the game's own handlers of one event, past the mod's (no pad really leaves). */
+static void fire(unsigned slot, void *args) {
+    void *calls[ARRAY_COUNT(handlers)];
+    unsigned count = 0;
+    AcquireSRWLockExclusive(&lock);
+    for (unsigned i = 0; i < handlers_count; ++i) {
+        if (handlers[i].slot == slot) {
+            calls[count] = handlers[i].handler;
+            wrap_add_ref(calls[count++]);
+        }
+    }
+    void *sender = controller_statics;
+    ReleaseSRWLockExclusive(&lock);
+    for (unsigned i = 0; i < count; ++i) {
+        void *game_handler = ((WrapFace *)calls[i])->inner;
+        WRAP_METHOD(game_handler, DELEGATE_INVOKE, InvokeFn)(game_handler, sender, args);
+        wrap_release(calls[i]);
+    }
+}
+
+void players_tick(NamePromptFn prompt) {
+    UINT64 id = 0;
+    AcquireSRWLockShared(&lock);
+    int pending = waiting_count != 0;
+    if (pending) {
+        id = waiting[0];
+    }
+    ReleaseSRWLockShared(&lock);
+    if (!pending) {
+        return;
+    }
+    wchar_t name[ARRAY_COUNT(guest_name)];
+    memory_copy(name, L"Guest", sizeof(L"Guest"));
+    if (!prompt(name, ARRAY_COUNT(name)) || !name[0]) {
+        memory_copy(name, L"Guest", sizeof(L"Guest"));
+    }
+    name[ARRAY_COUNT(name) - 1] = 0;
+    void *controller = NULL;
+    AcquireSRWLockExclusive(&lock);
+    memory_copy(guest_name, name, sizeof(name));
+    if (id_in(waiting, waiting_count, id)) { // still plugged in
+        id_drop(waiting, &waiting_count, id);
+        if (joined_count < ARRAY_COUNT(joined)) {
+            joined[joined_count++] = id;
+        }
+        for (unsigned i = 0; i < pads_count && !controller; ++i) {
+            if (pads[i].id == id) {
+                controller = pads[i].wrapper;
+                wrap_add_ref(controller);
+            }
+        }
+    }
+    ReleaseSRWLockExclusive(&lock);
+    WrapLine line;
+    line.length = 0;
+    line_add(&line, "PLAYERS: the pad with device id ");
+    line_add_number(&line, id);
+    line_add(&line, controller ? " joins as the guest, named " : " left before joining; the guest is named ");
+    line_add_wide(&line, name);
+    line_log(&line);
+    if (!controller) {
+        return;
+    }
+    void *face = NULL;
+    WRAP_METHOD(controller, 0, QueryFn)(controller, &IID_IController, &face);
+    wrap_release(controller);
+    PadEventArgs *args = face ? HeapAlloc(GetProcessHeap(), 0, sizeof(PadEventArgs)) : NULL;
+    if (!args) {
+        if (face) {
+            wrap_release(face);
+        }
+        return;
+    }
+    args->vtable = pad_args_vt;
+    args->refs = 1;
+    args->controller = face;
+    fire(CONTROLLER_REMOVED, args); // the game lets go of the pad it gave user 1...
+    fire(CONTROLLER_ADDED, args);   // ...and takes it back, asking whose it is
+    pad_args_release(args);
 }
 
 /* Factories */
@@ -544,6 +898,9 @@ void *players_factory(const wchar_t *class_name, const GUID *iid, void *factory)
                     if (classes[c].kind == &kind_user_statics) {
                         user_statics = factory;
                     }
+                    if (classes[c].kind == &kind_controller_statics) {
+                        controller_statics = result;
+                    }
                 }
             }
         }
@@ -558,7 +915,7 @@ void *players_factory(const wchar_t *class_name, const GUID *iid, void *factory)
 void players_init(void) {
     wrap_init();
     void **all[] = {user_statics_vt, user_view_vt, guest_vt, controller_statics_vt, gamepad_statics_vt,
-                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt};
+                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt, display_info_vt};
     for (unsigned i = 0; i < ARRAY_COUNT(all); ++i) {
         wrap_vtable(all[i]);
     }
@@ -573,10 +930,16 @@ void players_init(void) {
     guest_vt[USER_IS_GUEST] = (void *)guest_is_guest;
     guest_vt[USER_XBOX_HASH] = (void *)guest_xbox_hash;
     guest_vt[USER_XBOX_ID] = (void *)guest_xbox_id;
+    guest_vt[USER_DISPLAY_INFO] = (void *)guest_display_info;
+    display_info_vt[DISPLAY_NAME] = (void *)display_name_1;
+    display_info_vt[DISPLAY_NAME_2] = (void *)display_name_2;
+    display_info_vt[DISPLAY_NAME_3] = (void *)display_name_3;
     controller_statics_vt[CONTROLLER_STATICS_ALL] = (void *)statics_all;
     controller_statics_vt[CONTROLLER_ADDED] = (void *)controller_added;
     controller_statics_vt[CONTROLLER_REMOVED] = (void *)controller_removed;
     controller_statics_vt[CONTROLLER_PAIRING] = (void *)controller_pairing;
+    controller_statics_vt[CONTROLLER_ADDED_REMOVE] = (void *)controller_added_remove;
+    controller_statics_vt[CONTROLLER_REMOVED_REMOVE] = (void *)controller_removed_remove;
     gamepad_statics_vt[CONTROLLER_STATICS_ALL] = (void *)statics_all;
     pad_view_vt[VIEW_GET_AT] = (void *)pad_view_get_at;
     pad_view_vt[VIEW_INDEX_OF] = (void *)pad_view_index_of;
@@ -586,7 +949,8 @@ void players_init(void) {
     delegate_vt[DELEGATE_INVOKE] = (void *)delegate_invoke;
     event_args_vt[EVENT_CONTROLLER] = (void *)event_controller;
     WrapKind *kinds[] = {&kind_user_statics, &kind_user_view, &kind_guest, &kind_controller_statics,
-                         &kind_gamepad_statics, &kind_pad_view, &kind_pad, &kind_delegate, &kind_event_args};
+                         &kind_gamepad_statics, &kind_pad_view, &kind_pad, &kind_delegate, &kind_event_args,
+                         &kind_display_info};
     for (unsigned i = 0; i < ARRAY_COUNT(kinds); ++i) {
         wrap_watch(kinds[i]);
     }

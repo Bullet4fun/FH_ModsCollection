@@ -104,6 +104,9 @@ static DWORD WINAPI watch_thread(void *unused) {
         if (tick % 20 == 0) {
             wrap_report();
         }
+        if (hooked) {
+            players_tick(name_prompt); // blocks this thread while the dialog is up, never the game's
+        }
     }
 }
 
