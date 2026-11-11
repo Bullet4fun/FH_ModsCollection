@@ -3,11 +3,3 @@ EXPORTS
     GetAsyncKeyState
     GetForegroundWindow
     GetWindowThreadProcessId
-    DialogBoxIndirectParamW
-    EndDialog
-    GetDlgItem
-    GetDlgItemTextW
-    SendDlgItemMessageW
-    SetDlgItemTextW
-    SetFocus
-    SetForegroundWindow

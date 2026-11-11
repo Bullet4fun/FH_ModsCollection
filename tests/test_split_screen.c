@@ -177,37 +177,6 @@ static HRESULT handler_invoke(void *self, void *sender, void *event_args) {
     return S_OK;
 }
 
-/* The name prompt: checks the default and answers a name, or skips. */
-static int prompt_count, prompt_skip, prompt_default_ok;
-static int fake_prompt(wchar_t *name, unsigned capacity) {
-    ++prompt_count;
-    prompt_default_ok = capacity >= 6 && name[0] == L'G' && name[5] == 0;
-    if (prompt_skip) {
-        return 0;
-    }
-    name[0] = L'V', name[1] = L'a', name[2] = L'n', name[3] = L'y', name[4] = L'a', name[5] = 0;
-    return 1;
-}
-static int string_is(HSTRING string, const wchar_t *text) {
-    UINT32 length = 0;
-    const wchar_t *raw = WindowsGetStringRawBuffer(string, &length);
-    UINT32 n = 0;
-    while (text[n]) {
-        ++n;
-    }
-    for (UINT32 i = 0; i < n && i < length; ++i) {
-        if (raw[i] != text[i]) {
-            return 0;
-        }
-    }
-    return length == n;
-}
-static Fake display;
-static HRESULT user_display(FakeFace *self, void **out) {
-    (void)self;
-    *out = &display.face[0]; // as Azimuth: its own object
-    return S_OK;
-}
 static Fake handler;
 static void *handler_vt[16];
 
@@ -221,7 +190,6 @@ int main(void) {
     user_vt[6] = (void *)user_id;
     user_vt[10] = (void *)user_flag;
     user_vt[14] = user_vt[15] = (void *)user_string;
-    user_vt[9] = (void *)user_display;
     statics_vt[6] = (void *)statics_count;
     statics_vt[9] = (void *)statics_users;
     statics_vt[14] = (void *)statics_by_id;
@@ -238,7 +206,6 @@ int main(void) {
     reading_vt[7] = (void *)reading_get_buttons;
     gamepad_vt[7] = (void *)pad_reading;
     fake_init(&reading, reading_vt, NULL);
-    fake_init(&display, base_vtable, NULL);
     handler_vt[3] = (void *)handler_invoke;
     fake_init(&user, user_vt, NULL);
     fake_init(&users, list_vt, NULL);
@@ -369,7 +336,7 @@ int main(void) {
     for (int i = 0; i < 2; ++i) {
         CALL(controllers[i], 8, HRESULT (*)(void *, void **))(controllers[i], &owners[i]);
     }
-    CHECK(owners[0] == &user.face[0] && owners[1] == &user.face[0]); // the second waits for the guest's name
+    CHECK(owners[0] == &user.face[0] && owners[1] == &user.face[0]); // the second waits for players_tick
     user.refs -= 2;
 
     // the game's controller events: the mod keeps its Added and Removed handlers
@@ -381,9 +348,8 @@ int main(void) {
     void *removed = controller_statics.handler;
     CHECK(added && removed && added != removed && added != &handler.face[0]);
 
-    // the name prompt: the pad joins as the guest, and the game sees it leave and come back
-    players_tick(fake_prompt);
-    CHECK(prompt_count == 1 && prompt_default_ok);
+    // the pad joins as the guest: the game sees it leave and come back
+    players_tick();
     CHECK(handled_count == 2 && handled_controller == controllers[1] && handled_sender == controllers_statics);
     CHECK(handled_user == guest); // asked again on the way back: now the guest's
     for (int i = 0; i < 2; ++i) {
@@ -392,18 +358,9 @@ int main(void) {
     CHECK(owners[0] == &user.face[0] && owners[1] == guest);
     wrap_release(owners[1]);
     --user.refs;
-    players_tick(fake_prompt);
-    CHECK(prompt_count == 1); // nobody else waits
-    // the guest's name, in every name slot
-    void *info = NULL;
-    CHECK(CALL(guest, 9, HRESULT (*)(void *, void **))(guest, &info) == S_OK && info && info != &display.face[0]);
-    const int name_slots[] = {6, 8, 9};
-    for (int i = 0; i < 3; ++i) {
-        HSTRING name = NULL;
-        CHECK(CALL(info, name_slots[i], HRESULT (*)(void *, HSTRING *))(info, &name) == S_OK && string_is(name, L"Vanya"));
-        WindowsDeleteString(name);
-    }
-    wrap_release(info);
+    handled_count = 0;
+    players_tick();
+    CHECK(handled_count == 0); // nobody else waits
 
     // the same device is the same object for the game, through any list or event
     void *again = NULL;
@@ -418,23 +375,15 @@ int main(void) {
     wrap_release(gamepads);
     CHECK(pad_list.refs == 1);
 
-    // Azimuth's events: unplugging forgets the guest's pad, plugging it in asks the name again
+    // Azimuth's events: unplugging forgets the guest's pad, plugging it in joins it again
     handled_count = 0;
     CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
     CHECK(handled_count == 1 && handled_user == guest);
     CHECK(pads[1].refs == 1 && args.refs == 1); // the mod let go of the device
     CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
-    CHECK(handled_count == 2 && handled_user == &user.face[0]); // not named yet
-    prompt_skip = 1;
-    players_tick(fake_prompt);
-    CHECK(prompt_count == 2 && handled_count == 4 && handled_user == guest);
-    info = NULL;
-    CALL(guest, 9, HRESULT (*)(void *, void **))(guest, &info);
-    HSTRING skipped = NULL;
-    CALL(info, 6, HRESULT (*)(void *, HSTRING *))(info, &skipped);
-    CHECK(string_is(skipped, L"Guest")); // skipped: the default name
-    WindowsDeleteString(skipped);
-    wrap_release(info);
+    CHECK(handled_count == 2 && handled_user == &user.face[0]); // not joined yet
+    players_tick();
+    CHECK(handled_count == 4 && handled_user == guest);
 
     void *all = NULL;
     CALL(controllers_statics, 6, HRESULT (*)(void *, void **))(controllers_statics, &all);
