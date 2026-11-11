@@ -9,4 +9,7 @@ void players_init(void);
 /* Every activation factory Azimuth hands the game passes through here: returns what the game gets
    instead (a wrapper, or factory itself), owning the reference factory came with. */
 void *players_factory(const wchar_t *class_name, const GUID *iid, void *factory);
+/* Where the game's WindowsCreateString, WindowsGetStringRawBuffer and WindowsDeleteString are (import
+   slots, read at each use); without them the guest keeps user 1's Xbox user id. */
+void players_strings(void *const *create, void *const *buffer, void *const *destroy);
 #endif

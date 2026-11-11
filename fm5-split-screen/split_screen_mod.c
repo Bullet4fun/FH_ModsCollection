@@ -136,6 +136,9 @@ __declspec(dllexport) int AzimuthModLoad(const AzimuthModHost *host) {
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)host->game_image;
     image_size = ((IMAGE_NT_HEADERS64 *)(host->game_image + dos->e_lfanew))->OptionalHeader.SizeOfImage;
     players_init();
+    players_strings(import_slot(host->game_image, "combase.dll", "WindowsCreateString"),
+                    import_slot(host->game_image, "combase.dll", "WindowsGetStringRawBuffer"),
+                    import_slot(host->game_image, "combase.dll", "WindowsDeleteString"));
     HANDLE thread = CreateThread(NULL, 0, watch_thread, NULL, 0, NULL);
     if (!thread) {
         log_append("WARNING: cannot start the mod's thread; the mod stays off\r\n");

@@ -195,6 +195,9 @@ int main(void) {
     fake_init(&handler, handler_vt, NULL);
 
     players_init();
+    static void *create = (void *)WindowsCreateString, *buffer = (void *)WindowsGetStringRawBuffer,
+                *destroy = (void *)WindowsDeleteString;
+    players_strings(&create, &buffer, &destroy);
     GUID iid = {0};
     // other classes pass through untouched
     CHECK(players_factory(L"Windows.Xbox.UI.SystemUI", &iid, &args.face[0]) == &args.face[0]);

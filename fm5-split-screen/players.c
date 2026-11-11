@@ -1,5 +1,4 @@
 #include "players.h"
-#include <winstring.h>
 #include "support.h"
 
 /* Slots below are the Xbox One interfaces' vtable order, which the game and Azimuth both follow
@@ -221,28 +220,42 @@ static HRESULT guest_is_guest(WrapFace *self, unsigned char *out) {
     return S_OK;
 }
 
+/* The game's own string functions: Azimuth emulates WinRT strings, so a string the game gets must
+   come from Azimuth's functions, not from Windows' combase. */
+static void *const *string_create, *const *string_buffer, *const *string_delete;
+
+void players_strings(void *const *create, void *const *buffer, void *const *destroy) {
+    string_create = create;
+    string_buffer = buffer;
+    string_delete = destroy;
+}
+
 /* User 1's string with a "2" after it: another Xbox user id and hash, as unique as user 1's own. */
-static HRESULT guest_string(WrapFace *self, unsigned slot, HSTRING *out) {
+static HRESULT guest_string(WrapFace *self, unsigned slot, void **out) {
     wrap_note(self, slot);
-    HSTRING own = NULL;
-    HRESULT result = WRAP_METHOD(self->inner, slot, GetPointerFn)(self->inner, (void **)&own);
+    void *own = NULL;
+    HRESULT result = WRAP_METHOD(self->inner, slot, GetPointerFn)(self->inner, &own);
     if (FAILED(result) || !out) {
         return result;
     }
+    if (!string_create || !string_buffer || !string_delete || !*string_create || !*string_buffer || !*string_delete) {
+        *out = own; // no way to make another string: the guest keeps user 1's
+        return result;
+    }
     UINT32 length = 0;
-    const wchar_t *text = WindowsGetStringRawBuffer(own, &length);
+    const wchar_t *text = ((const wchar_t *(*)(void *, UINT32 *))*string_buffer)(own, &length);
     wchar_t buffer[128];
     UINT32 n = 0;
     for (; text && n < length && n < ARRAY_COUNT(buffer) - 1; ++n) {
         buffer[n] = text[n];
     }
     buffer[n++] = L'2';
-    WindowsDeleteString(own);
-    return WindowsCreateString(buffer, n, out);
+    ((HRESULT (*)(void *))*string_delete)(own);
+    return ((HRESULT (*)(const wchar_t *, UINT32, void **))*string_create)(buffer, n, out);
 }
 
-static HRESULT guest_xbox_hash(WrapFace *self, HSTRING *out) { return guest_string(self, USER_XBOX_HASH, out); }
-static HRESULT guest_xbox_id(WrapFace *self, HSTRING *out) { return guest_string(self, USER_XBOX_ID, out); }
+static HRESULT guest_xbox_hash(WrapFace *self, void **out) { return guest_string(self, USER_XBOX_HASH, out); }
+static HRESULT guest_xbox_id(WrapFace *self, void **out) { return guest_string(self, USER_XBOX_ID, out); }
 
 /* Pads: the second one's user is the guest */
 static void *pad_wrap(void *inner, int controller) {

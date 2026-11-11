@@ -256,7 +256,6 @@ def build(compiler, output, directory, options):
     # Line-in Radio: ole32 for the sound devices (WASAPI), mfplat/mfreadwrite to decode songs, shell32 for their tags,
     # combase for the players' media sessions (WinRT)
     line_in_libraries = ["ole32", "mfplat", "mfreadwrite", "shell32", "combase"] if options.line_in else []
-    line_in_libraries += ["combase"] if options.split_screen else []  # the guest's Xbox user id strings
     radio_libraries = ["xinput1_4"] if options.spotify or options.line_in else []
     for name in ("user32", "ws2_32", *radio_libraries, *line_in_libraries):
         system_libraries.append(f"{name}.lib")
