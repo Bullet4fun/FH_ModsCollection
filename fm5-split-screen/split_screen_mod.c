@@ -55,11 +55,55 @@ static void **import_slot(unsigned char *image, const char *dll, const char *nam
     return NULL;
 }
 
-static DWORD WINAPI trace_thread(void *unused) {
+static void **factory_slot;
+static uintptr_t image_size;
+
+/* Puts factory_hook in the slot in place of resolved, Azimuth's function. */
+static int hook_import(void *resolved) {
+    DWORD protection;
+    if (!VirtualProtect(factory_slot, sizeof(void *), PAGE_READWRITE, &protection)) {
+        return 0;
+    }
+    original_factory = (FactoryFn)resolved;
+    int hooked = InterlockedCompareExchangePointer(factory_slot, (void *)factory_hook, resolved) == resolved;
+    VirtualProtect(factory_slot, sizeof(void *), protection, &protection);
+    return hooked;
+}
+
+/* Mods load before Azimuth resolves the game's imports: until then the slot holds the import's name
+   (an offset into the image), and resolving overwrites anything written there. So this thread waits
+   for Azimuth's pointer, puts the hook in its place at once (the game is only starting), and keeps
+   an eye on the slot afterwards. */
+static DWORD WINAPI watch_thread(void *unused) {
     (void)unused;
-    for (;;) {
-        Sleep(2000);
-        wrap_report();
+    ULONGLONG start = GetTickCount64();
+    int hooked = 0, warned = 0;
+    for (unsigned tick = 0;; ++tick) {
+        void *value = *(void *volatile *)factory_slot;
+        if (value != (void *)factory_hook && (uintptr_t)value > image_size && hook_import(value)) {
+            WrapLine line;
+            line.length = 0;
+            line_add(&line, hooked ? "WARNING: the factory import was written again; back through the mod"
+                                   : "Azimuth resolved the game's factory import; it passes through the mod after ");
+            if (!hooked) {
+                line_add_number(&line, GetTickCount64() - start);
+                line_add(&line, " ms");
+            }
+            line_log(&line);
+            hooked = 1;
+        }
+        if (!hooked && GetTickCount64() - start < 120000) {
+            Sleep(0); // the game starts right after resolving: catch the pointer within microseconds
+            continue;
+        }
+        if (!hooked && !warned) {
+            warned = 1;
+            log_append("WARNING: Azimuth never resolved the game's factory import; the mod stays off\r\n");
+        }
+        Sleep(100);
+        if (tick % 20 == 0) {
+            wrap_report();
+        }
     }
 }
 
@@ -83,21 +127,20 @@ __declspec(dllexport) int AzimuthModLoad(const AzimuthModHost *host) {
         mod_log_open(log_path, 1, "SplitScreen");
     }
     log_append("FM5 Split-Screen " SPLIT_SCREEN_VERSION " by Bullet4fun: https://github.com/Bullet4fun/FH_ModsCollection\r\n");
-    void **slot = import_slot(host->game_image, "vccorlib110.dll",
-                              "?GetActivationFactoryByPCWSTR@@YAJPEAXAEAVGuid@Platform@@PEAPEAX@Z");
-    DWORD protection;
-    if (!slot || !*slot || !VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &protection)) {
-        log_append("WARNING: the game's factory import is not where it should be; the mod stays off\r\n");
+    factory_slot = import_slot(host->game_image, "vccorlib110.dll",
+                               "?GetActivationFactoryByPCWSTR@@YAJPEAXAEAVGuid@Platform@@PEAPEAX@Z");
+    if (!factory_slot) {
+        log_append("WARNING: the game has no factory import where it should be; the mod stays off\r\n");
         return 1;
     }
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)host->game_image;
+    image_size = ((IMAGE_NT_HEADERS64 *)(host->game_image + dos->e_lfanew))->OptionalHeader.SizeOfImage;
     players_init();
-    original_factory = (FactoryFn)*slot;
-    *slot = (void *)factory_hook;
-    VirtualProtect(slot, sizeof(*slot), protection, &protection);
-    log_append("The game's WinRT factories now pass through the mod\r\n");
-    HANDLE thread = CreateThread(NULL, 0, trace_thread, NULL, 0, NULL);
-    if (thread) {
-        CloseHandle(thread);
+    HANDLE thread = CreateThread(NULL, 0, watch_thread, NULL, 0, NULL);
+    if (!thread) {
+        log_append("WARNING: cannot start the mod's thread; the mod stays off\r\n");
+        return 1;
     }
+    CloseHandle(thread);
     return 1;
 }
