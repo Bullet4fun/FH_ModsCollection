@@ -18,6 +18,8 @@ enum {
     VIEW_GET_MANY = 9,
     CONTROLLER_ID = 6,
     CONTROLLER_USER = 8,
+    GAMEPAD_READING = 7, /* IGamepad::GetCurrentReading, an IGamepadReading */
+    READING_BUTTONS = 7,
     CONTROLLER_STATICS_ALL = 6, /* Controller::Controllers, and Gamepad::Gamepads on the gamepad statics */
     CONTROLLER_ADDED = 7,       /* add_ControllerAdded; 9 ControllerRemoved, 11 ControllerPairingChanged */
     CONTROLLER_REMOVED = 9,
@@ -26,12 +28,13 @@ enum {
     EVENT_CONTROLLER = 6, /* the event arguments' Controller */
 };
 #define GUEST_USER_ID 2u
-#define GUEST_PAD_INDEX 1 /* the second pad by device id */
+#define BUTTON_A 0x10u /* Windows.Xbox.Input.GamepadButtons */
 
 /* Windows.Xbox.Input.IController: Azimuth's gamepads answer it with their second vtable. */
 static const GUID IID_IController = {0x9776ff56, 0x9bfd, 0x4581, {0xad, 0x45, 0xb6, 0x45, 0xbb, 0xa5, 0x26, 0xd6}};
 
 typedef HRESULT (*GetPointerFn)(void *, void **);
+typedef HRESULT (*QueryFn)(void *, const GUID *, void **);
 typedef HRESULT (*GetU32Fn)(void *, UINT32 *);
 typedef HRESULT (*GetU64Fn)(void *, UINT64 *);
 typedef HRESULT (*ByIdFn)(void *, UINT32, void **);
@@ -59,6 +62,8 @@ static void *user_statics; /* Azimuth's, for the guest's own user object */
 static void *guest;        /* the guest's wrapper, kept for the whole session */
 static UINT64 pad_ids[8];  /* device ids seen, ascending */
 static unsigned pad_count;
+static UINT64 first_pad;  /* the device that pressed A first: player 1's, all the others the guest's */
+static int first_pad_known;
 
 static void log_text(const char *a, const char *b) {
     WrapLine line;
@@ -262,14 +267,47 @@ static void *pad_wrap(void *inner, int controller) {
     return wrap_new(&kind_pad, inner, controller ? pad_controller_vt : pad_vt, 0);
 }
 
+/* Until a pad presses A every pad is user 1's, as in Azimuth: the game signs in whoever starts it. */
 static HRESULT pad_user(WrapFace *self, void **out) {
     wrap_note(self, CONTROLLER_USER);
     UINT64 id = 0;
     if (out && SUCCEEDED(WRAP_METHOD(self->inner, CONTROLLER_ID, GetU64Fn)(self->inner, &id)) &&
-        pad_index(id) == GUEST_PAD_INDEX && (*out = guest_ref()) != NULL) {
+        pad_index(id) >= 0 && first_pad_known && id != first_pad && (*out = guest_ref()) != NULL) {
         return S_OK;
     }
     return WRAP_METHOD(self->inner, CONTROLLER_USER, GetPointerFn)(self->inner, out);
+}
+
+/* The first pad seen pressing A becomes player 1's. */
+static HRESULT pad_reading(WrapFace *self, void **out) {
+    wrap_note(self, GAMEPAD_READING);
+    HRESULT result = WRAP_METHOD(self->inner, GAMEPAD_READING, GetPointerFn)(self->inner, out);
+    UINT32 buttons = 0;
+    if (SUCCEEDED(result) && out && *out && !first_pad_known &&
+        SUCCEEDED(WRAP_METHOD(*out, READING_BUTTONS, GetU32Fn)(*out, &buttons)) && (buttons & BUTTON_A)) {
+        void *controller = NULL;
+        UINT64 id = 0;
+        if (SUCCEEDED(WRAP_METHOD(self->inner, 0, QueryFn)(self->inner, &IID_IController, &controller)) && controller) {
+            int known = SUCCEEDED(WRAP_METHOD(controller, CONTROLLER_ID, GetU64Fn)(controller, &id));
+            WRAP_METHOD(controller, 2, ULONG (*)(void *))(controller);
+            AcquireSRWLockExclusive(&lock);
+            int first = known && !first_pad_known;
+            if (first) {
+                first_pad = id;
+                first_pad_known = 1;
+            }
+            ReleaseSRWLockExclusive(&lock);
+            if (first) {
+                WrapLine line;
+                line.length = 0;
+                line_add(&line, "PLAYERS: the pad with device id ");
+                line_add_number(&line, id);
+                line_add(&line, " pressed A first: it is player 1, any other pad is the guest's");
+                line_log(&line);
+            }
+        }
+    }
+    return result;
 }
 
 static HRESULT statics_all(WrapFace *self, void **out) {
@@ -482,6 +520,7 @@ void players_init(void) {
     pad_view_vt[VIEW_INDEX_OF] = (void *)pad_view_index_of;
     pad_view_vt[VIEW_GET_MANY] = (void *)pad_view_get_many;
     pad_controller_vt[CONTROLLER_USER] = (void *)pad_user;
+    pad_vt[GAMEPAD_READING] = (void *)pad_reading;
     delegate_vt[DELEGATE_INVOKE] = (void *)delegate_invoke;
     event_args_vt[EVENT_CONTROLLER] = (void *)event_controller;
     WrapKind *kinds[] = {&kind_user_statics, &kind_user_view, &kind_guest, &kind_controller_statics,

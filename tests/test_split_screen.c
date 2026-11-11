@@ -107,6 +107,19 @@ static HRESULT pad_id(FakeFace *self, UINT64 *out) {
     return S_OK;
 }
 static HRESULT pad_user(FakeFace *self, void **out) { return statics_by_id(self, 1, out); }
+static Fake reading;
+static UINT32 reading_buttons;
+static HRESULT reading_get_buttons(FakeFace *self, UINT32 *out) {
+    (void)self;
+    *out = reading_buttons;
+    return S_OK;
+}
+static HRESULT pad_reading(FakeFace *self, void **out) {
+    (void)self;
+    ++reading.refs;
+    *out = &reading.face[0];
+    return S_OK;
+}
 static HRESULT pads_all(FakeFace *self, void **out) {
     Fake *list = self->owner == &controller_statics ? &controller_list : &pad_list;
     ++list->refs;
@@ -127,7 +140,7 @@ static HRESULT args_controller(FakeFace *self, void **out) {
 }
 
 static void *base_vtable[16] = {(void *)fake_query, (void *)fake_add_ref, (void *)fake_release, 0, 0, (void *)fake_class_name};
-static void *user_vt[16], *statics_vt[16], *list_vt[16], *gamepad_vt[16], *controller_vt[16], *pad_statics_vt[16], *args_vt[16];
+static void *reading_vt[16], *user_vt[16], *statics_vt[16], *list_vt[16], *gamepad_vt[16], *controller_vt[16], *pad_statics_vt[16], *args_vt[16];
 
 static void fake_init(Fake *fake, void **face0, void **face1) {
     fake->face[0].vtable = face0;
@@ -155,7 +168,7 @@ static void *handler_vt[16];
 
 int main(void) {
     for (int i = 0; i < 16; ++i) {
-        user_vt[i] = statics_vt[i] = list_vt[i] = gamepad_vt[i] = controller_vt[i] = pad_statics_vt[i] = args_vt[i] =
+        reading_vt[i] = user_vt[i] = statics_vt[i] = list_vt[i] = gamepad_vt[i] = controller_vt[i] = pad_statics_vt[i] = args_vt[i] =
             handler_vt[i] = base_vtable[i];
     }
     user_vt[6] = (void *)user_id;
@@ -172,6 +185,9 @@ int main(void) {
     pad_statics_vt[6] = (void *)pads_all;
     pad_statics_vt[7] = (void *)add_event;
     args_vt[6] = (void *)args_controller;
+    reading_vt[7] = (void *)reading_get_buttons;
+    gamepad_vt[7] = (void *)pad_reading;
+    fake_init(&reading, reading_vt, NULL);
     handler_vt[3] = (void *)handler_invoke;
     fake_init(&user, user_vt, NULL);
     fake_init(&users, list_vt, NULL);
@@ -271,6 +287,23 @@ int main(void) {
         CALL(pad_objects[i], 0, HRESULT (*)(void *, const GUID *, void **))(pad_objects[i], &IID_IController, &again);
         CHECK(again == controllers[i]);
         wrap_release(again);
+        CALL(controllers[i], 8, HRESULT (*)(void *, void **))(controllers[i], &owners[i]);
+    }
+    CHECK(owners[0] == &user.face[0] && owners[1] == &user.face[0]); // no pad pressed A yet: all user 1's
+    user.refs -= 2;
+    // the second pad reads B, then the first reads A: the first is player 1's, the second the guest's
+    void *state = NULL;
+    reading_buttons = 0x20;
+    CALL(pad_objects[1], 7, HRESULT (*)(void *, void **))(pad_objects[1], &state);
+    CHECK(state == &reading.face[0]);
+    --reading.refs;
+    reading_buttons = 0x10;
+    CALL(pad_objects[0], 7, HRESULT (*)(void *, void **))(pad_objects[0], &state);
+    --reading.refs;
+    reading_buttons = 0x10;
+    CALL(pad_objects[1], 7, HRESULT (*)(void *, void **))(pad_objects[1], &state); // too late to be player 1
+    --reading.refs;
+    for (int i = 0; i < 2; ++i) {
         CALL(controllers[i], 8, HRESULT (*)(void *, void **))(controllers[i], &owners[i]);
     }
     CHECK(owners[0] == &user.face[0] && owners[1] == guest);

@@ -2,7 +2,7 @@
 #define FM5_PLAYERS_H
 /* A second console user for Forza Motorsport 5. Azimuth emulates one signed-in user and pairs every
    pad with it; the wrappers here add a guest (user id 2), list it among the users and pair it with
-   the second pad, by device id order. */
+   every pad but the one that pressed A first. */
 #include "wrap.h"
 
 void players_init(void);
