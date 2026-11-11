@@ -285,7 +285,7 @@ int main(void) {
     CHECK(CALL(guest, 15, HRESULT (*)(void *, HSTRING *))(guest, &xbox_id) == S_OK);
     UINT32 length = 0;
     const wchar_t *text = WindowsGetStringRawBuffer(xbox_id, &length);
-    CHECK(length == 3 && text[0] == L'2' && text[1] == L'5' && text[2] == L'2');
+    CHECK(length == 2 && text[0] == L'2' && text[1] == L'5'); // user 1's own
     WindowsDeleteString(xbox_id);
     void *info = NULL; // the guest's name, in every name slot
     CHECK(CALL(guest, 9, HRESULT (*)(void *, void **))(guest, &info) == S_OK && info && info != &display.face[0]);

@@ -11,8 +11,6 @@ enum {
     USER_ID = 6,
     USER_DISPLAY_INFO = 9,
     USER_IS_GUEST = 10,
-    USER_XBOX_HASH = 14,
-    USER_XBOX_ID = 15,
     VIEW_GET_AT = 6, /* IVectorView */
     VIEW_SIZE = 7,
     VIEW_INDEX_OF = 8,
@@ -132,7 +130,8 @@ static void log_text(const char *a, const char *b) {
     line_log(&line);
 }
 
-/* The guest: user 1's object behind a wrapper with its own id, guest flag and Xbox user id. */
+/* The guest: user 1's object behind a wrapper with its own id and guest flag. Its Xbox user id and
+   hash stay user 1's, whatever they are, so the game can find user 1's garage for it. */
 static void *guest_get(void) {
     AcquireSRWLockExclusive(&lock);
     if (!guest && user_statics) {
@@ -293,30 +292,6 @@ void players_strings(void *const *create, void *const *buffer, void *const *dest
     string_delete = destroy;
 }
 
-/* User 1's string with a "2" after it: another Xbox user id and hash, as unique as user 1's own. */
-static HRESULT guest_string(WrapFace *self, unsigned slot, void **out) {
-    wrap_note(self, slot);
-    void *own = NULL;
-    HRESULT result = WRAP_METHOD(self->inner, slot, GetPointerFn)(self->inner, &own);
-    if (FAILED(result) || !out) {
-        return result;
-    }
-    if (!string_create || !string_buffer || !string_delete || !*string_create || !*string_buffer || !*string_delete) {
-        *out = own; // no way to make another string: the guest keeps user 1's
-        return result;
-    }
-    UINT32 length = 0;
-    const wchar_t *text = ((const wchar_t *(*)(void *, UINT32 *))*string_buffer)(own, &length);
-    wchar_t buffer[128];
-    UINT32 n = 0;
-    for (; text && n < length && n < ARRAY_COUNT(buffer) - 1; ++n) {
-        buffer[n] = text[n];
-    }
-    buffer[n++] = L'2';
-    ((HRESULT (*)(void *))*string_delete)(own);
-    return ((HRESULT (*)(const wchar_t *, UINT32, void **))*string_create)(buffer, n, out);
-}
-
 /* The guest's name in every name slot of its display info (the game reads it once, at boot). */
 static HRESULT display_name(WrapFace *self, unsigned slot, void **out) {
     wrap_note(self, slot);
@@ -356,8 +331,6 @@ static HRESULT guest_display_info(WrapFace *self, void **out) {
     return result;
 }
 
-static HRESULT guest_xbox_hash(WrapFace *self, void **out) { return guest_string(self, USER_XBOX_HASH, out); }
-static HRESULT guest_xbox_id(WrapFace *self, void **out) { return guest_string(self, USER_XBOX_ID, out); }
 
 /* Pads */
 static int device_id(void *object, int controller, UINT64 *id) {
@@ -911,8 +884,6 @@ void players_init(void) {
     user_view_vt[VIEW_GET_MANY] = (void *)user_view_get_many;
     guest_vt[USER_ID] = (void *)guest_id;
     guest_vt[USER_IS_GUEST] = (void *)guest_is_guest;
-    guest_vt[USER_XBOX_HASH] = (void *)guest_xbox_hash;
-    guest_vt[USER_XBOX_ID] = (void *)guest_xbox_id;
     guest_vt[USER_DISPLAY_INFO] = (void *)guest_display_info;
     display_info_vt[DISPLAY_NAME] = (void *)display_name_1;
     display_info_vt[DISPLAY_NAME_2] = (void *)display_name_2;
