@@ -20,6 +20,8 @@ TESTS = [  # (source, extra sources)
     ("tests/test_line_in.c", ["-I", "line-in-radio", "common/support.c", "common/mod_log.c",
                               "-lole32", "-lmfplat", "-lmfreadwrite", "-lmfuuid", "-lshell32", "-lapi-ms-win-core-winrt-l1-1-0",
                               "-lapi-ms-win-core-winrt-string-l1-1-0"]),
+    ("tests/test_split_screen.c", ["fm5-split-screen/players.c", "fm5-split-screen/wrap.c", "common/support.c",
+                                   "common/mod_log.c", "-lapi-ms-win-core-winrt-string-l1-1-0"]),
 ]
 
 

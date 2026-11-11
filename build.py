@@ -1,5 +1,5 @@
 """Build the mods with Zig 0.15.2, including cross-compilation on Linux.
-Usage: python build.py /path/to/zig (--mod | --spotify | --discord | --line-in) [--output PATH]
+Usage: python build.py /path/to/zig (--mod | --spotify | --discord | --line-in | --split-screen) [--output PATH]
 The mod loader (Azimuth Mod Loader, dinput8.dll) lives in its own repo, Azimuth_ModLoader.
 """
 
@@ -97,10 +97,14 @@ SPOTIFY_SOURCES = ["spotify-radio/spotify_mod.c", "common/mod_log.c", "spotify-r
 LINE_IN_SOURCES = ["line-in-radio/line_in_capture.c", "line-in-radio/line_in_songs.c", "line-in-radio/line_in_player.c",
                    "line-in-radio/line_in_menu.c",
                    *SPOTIFY_SOURCES]
+# FM5 Split-Screen: a guest player for split-screen, through wrapped WinRT factories
+SPLIT_SCREEN_SOURCES = ["fm5-split-screen/split_screen_mod.c", "fm5-split-screen/players.c", "fm5-split-screen/wrap.c",
+                        "common/mod_log.c", "common/support.c"]
 INCLUDE_DIRS = ["common", "sdk", "extra-options", "spotify-radio", "discord-rpc"]
 SPOTIFY_VERSION = "1.5.0"
 DISCORD_VERSION = "1.4.1"
 LINE_IN_VERSION = "1.1.0"
+SPLIT_SCREEN_VERSION = "0.1.0"
 
 
 def version_resource(compiler, directory, filename, description, product, version):
@@ -144,11 +148,12 @@ def parse_arguments():
     parser.add_argument("--discord", action="store_true", help="Build the Discord Rich Presence mod")
     parser.add_argument("--spotify", action="store_true", help="Build the Spotify radio mod")
     parser.add_argument("--line-in", action="store_true", help="Build the Line-in radio mod")
+    parser.add_argument("--split-screen", action="store_true", help="Build the Forza Motorsport 5 split-screen mod")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--build-dir", type=Path)
     arguments = parser.parse_args()
-    if sum((arguments.mod, arguments.discord, arguments.spotify, arguments.line_in)) != 1:
-        parser.error("choose one of --mod, --discord, --spotify, --line-in")
+    if sum((arguments.mod, arguments.discord, arguments.spotify, arguments.line_in, arguments.split_screen)) != 1:
+        parser.error("choose one of --mod, --discord, --spotify, --line-in, --split-screen")
     return arguments
 
 
@@ -184,6 +189,8 @@ def compiler_arguments(compiler, options):
         arguments.append(f'-DDISCORD_VERSION="{DISCORD_VERSION}"')  # its line in the loader's log
     if options.line_in:  # here, not in INCLUDE_DIRS: the command line is in the debug info, so the other DLLs stay as they were
         arguments += ["-I", str(SOURCE / "line-in-radio"), "-DLINE_IN_RADIO=1", f'-DLINE_IN_VERSION="{LINE_IN_VERSION}"']
+    if options.split_screen:
+        arguments += ["-I", str(SOURCE / "fm5-split-screen"), f'-DSPLIT_SCREEN_VERSION="{SPLIT_SCREEN_VERSION}"']
     return arguments
 
 
@@ -193,6 +200,8 @@ def describe(options):
         return "Spotify radio for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH Mods Collection", SPOTIFY_VERSION
     if options.discord:
         return "Discord Rich Presence for Azimuth games (Azimuth Mod Loader mod)", "FH Mods Collection", DISCORD_VERSION
+    if options.split_screen:
+        return "Split-screen guest player for Forza Motorsport 5 (Azimuth Mod Loader mod)", "FH Mods Collection", SPLIT_SCREEN_VERSION
     if options.line_in:
         return "Line-in radio for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH Mods Collection", LINE_IN_VERSION
     header = (SOURCE / "extra-options/shared/extra_options.h").read_text(encoding="utf-8")
@@ -209,6 +218,8 @@ def build(compiler, output, directory, options):
         sources = SPOTIFY_SOURCES
     elif options.line_in:
         sources = LINE_IN_SOURCES
+    elif options.split_screen:
+        sources = SPLIT_SCREEN_SOURCES
     else:  # --mod: the loader owns Azimuth's helper ABI and finds the game
         sources = [*COMMON_SOURCES, *FM5_SOURCES, *FH3_SOURCES]
     arguments = compiler_arguments(compiler, options)
@@ -245,6 +256,7 @@ def build(compiler, output, directory, options):
     # Line-in Radio: ole32 for the sound devices (WASAPI), mfplat/mfreadwrite to decode songs, shell32 for their tags,
     # combase for the players' media sessions (WinRT)
     line_in_libraries = ["ole32", "mfplat", "mfreadwrite", "shell32", "combase"] if options.line_in else []
+    line_in_libraries += ["combase"] if options.split_screen else []  # the guest's Xbox user id strings
     radio_libraries = ["xinput1_4"] if options.spotify or options.line_in else []
     for name in ("user32", "ws2_32", *radio_libraries, *line_in_libraries):
         system_libraries.append(f"{name}.lib")
@@ -290,6 +302,7 @@ def main():
     filename = ("ExtraOptions.dll" if options.mod
                 else "DiscordRPC.dll" if options.discord
                 else "FH_LineInRadio.dll" if options.line_in
+                else "FM5_SplitScreen.dll" if options.split_screen
                 else "FH_SpotifyRadio.dll")
     output = (options.output or SOURCE.parent / filename).resolve()
     if options.build_dir:
