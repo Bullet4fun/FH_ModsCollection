@@ -9,6 +9,7 @@ enum {
     USER_STATICS_USERS = 9,
     USER_STATICS_BY_ID = 14,
     USER_ID = 6,
+    USER_DISPLAY_INFO = 9,
     USER_IS_GUEST = 10,
     USER_XBOX_HASH = 14,
     USER_XBOX_ID = 15,
@@ -27,6 +28,9 @@ enum {
     CONTROLLER_PAIRING = 11,
     CONTROLLER_ADDED_REMOVE = 8, /* remove_ControllerAdded(token); 10 remove_ControllerRemoved */
     CONTROLLER_REMOVED_REMOVE = 10,
+    DISPLAY_NAME = 6, /* IUserDisplayInfo: 6, 8 and 9 all answer the gamertag in Azimuth */
+    DISPLAY_NAME_2 = 8,
+    DISPLAY_NAME_3 = 9,
     DELEGATE_INVOKE = 3,
     EVENT_CONTROLLER = 6, /* the event arguments' Controller */
 };
@@ -52,6 +56,7 @@ typedef HRESULT (*RemoveEventFn)(void *, INT64);
 static void *user_statics_vt[WRAP_SLOTS], *user_view_vt[WRAP_SLOTS], *guest_vt[WRAP_SLOTS];
 static void *controller_statics_vt[WRAP_SLOTS], *gamepad_statics_vt[WRAP_SLOTS], *pad_view_vt[WRAP_SLOTS];
 static void *pad_vt[WRAP_SLOTS], *pad_controller_vt[WRAP_SLOTS], *delegate_vt[WRAP_SLOTS], *event_args_vt[WRAP_SLOTS];
+static void *display_info_vt[WRAP_SLOTS];
 
 static WrapKind kind_user_statics = {.name = "UserStatics", .primary = user_statics_vt};
 static WrapKind kind_user_view = {.name = "Users", .primary = user_view_vt};
@@ -63,6 +68,7 @@ static const struct WrapInterface pad_interfaces[] = {{&IID_IController, pad_con
 static WrapKind kind_pad = {.name = "Pad", .primary = pad_vt, .interfaces = pad_interfaces, .interface_count = 2};
 static WrapKind kind_delegate = {.name = "ControllerEventHandler", .primary = delegate_vt};
 static WrapKind kind_event_args = {.name = "ControllerEventArgs", .primary = event_args_vt};
+static WrapKind kind_display_info = {.name = "GuestDisplayInfo", .primary = display_info_vt};
 
 static SRWLOCK lock = SRWLOCK_INIT;
 static void *const *string_create, *const *string_buffer, *const *string_delete;
@@ -73,6 +79,7 @@ static unsigned pad_count;
 static UINT64 first_pad;  /* the device that pressed A first: player 1's, all the others the guest's */
 static int first_pad_known;
 static void *controller_statics; /* the mod's wrapper: the sender of the events the mod makes */
+static void *guest_display;      /* the guest's display info wrapper, kept for the session */
 /* Pads the guest plays with, and pads waiting to be shown to the game again as the guest's. */
 static UINT64 joined[8], waiting[8];
 static unsigned joined_count, waiting_count;
@@ -308,6 +315,45 @@ static HRESULT guest_string(WrapFace *self, unsigned slot, void **out) {
     buffer[n++] = L'2';
     ((HRESULT (*)(void *))*string_delete)(own);
     return ((HRESULT (*)(const wchar_t *, UINT32, void **))*string_create)(buffer, n, out);
+}
+
+/* The guest's name in every name slot of its display info (the game reads it once, at boot). */
+static HRESULT display_name(WrapFace *self, unsigned slot, void **out) {
+    wrap_note(self, slot);
+    if (out && string_create && *string_create &&
+        SUCCEEDED(((HRESULT (*)(const wchar_t *, UINT32, void **))*string_create)(L"Guest", 5, out))) {
+        return S_OK;
+    }
+    return WRAP_METHOD(self->inner, slot, GetPointerFn)(self->inner, out);
+}
+static HRESULT display_name_1(WrapFace *self, void **out) { return display_name(self, DISPLAY_NAME, out); }
+static HRESULT display_name_2(WrapFace *self, void **out) { return display_name(self, DISPLAY_NAME_2, out); }
+static HRESULT display_name_3(WrapFace *self, void **out) { return display_name(self, DISPLAY_NAME_3, out); }
+
+static HRESULT guest_display_info(WrapFace *self, void **out) {
+    wrap_note(self, USER_DISPLAY_INFO);
+    void *info = NULL;
+    HRESULT result = WRAP_METHOD(self->inner, USER_DISPLAY_INFO, GetPointerFn)(self->inner, &info);
+    if (FAILED(result) || !info || !out) {
+        if (out) {
+            *out = info;
+        }
+        return result;
+    }
+    /* Azimuth hands out its own object (whether with a reference is unknown): never released here,
+       one wrapper on it for the session. shortcut: leaks one reference if Azimuth added one. */
+    AcquireSRWLockExclusive(&lock);
+    if (!guest_display) {
+        wrap_add_ref(info);
+        guest_display = wrap_new(&kind_display_info, info, NULL, 0);
+    }
+    void *wrapper = guest_display;
+    if (wrapper) {
+        wrap_add_ref(wrapper);
+    }
+    ReleaseSRWLockExclusive(&lock);
+    *out = wrapper ? wrapper : info;
+    return result;
 }
 
 static HRESULT guest_xbox_hash(WrapFace *self, void **out) { return guest_string(self, USER_XBOX_HASH, out); }
@@ -852,7 +898,7 @@ void *players_factory(const wchar_t *class_name, const GUID *iid, void *factory)
 void players_init(void) {
     wrap_init();
     void **all[] = {user_statics_vt, user_view_vt, guest_vt, controller_statics_vt, gamepad_statics_vt,
-                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt};
+                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt, display_info_vt};
     for (unsigned i = 0; i < ARRAY_COUNT(all); ++i) {
         wrap_vtable(all[i]);
     }
@@ -867,6 +913,10 @@ void players_init(void) {
     guest_vt[USER_IS_GUEST] = (void *)guest_is_guest;
     guest_vt[USER_XBOX_HASH] = (void *)guest_xbox_hash;
     guest_vt[USER_XBOX_ID] = (void *)guest_xbox_id;
+    guest_vt[USER_DISPLAY_INFO] = (void *)guest_display_info;
+    display_info_vt[DISPLAY_NAME] = (void *)display_name_1;
+    display_info_vt[DISPLAY_NAME_2] = (void *)display_name_2;
+    display_info_vt[DISPLAY_NAME_3] = (void *)display_name_3;
     controller_statics_vt[CONTROLLER_STATICS_ALL] = (void *)statics_all;
     controller_statics_vt[CONTROLLER_ADDED] = (void *)controller_added;
     controller_statics_vt[CONTROLLER_REMOVED] = (void *)controller_removed;
@@ -882,7 +932,8 @@ void players_init(void) {
     delegate_vt[DELEGATE_INVOKE] = (void *)delegate_invoke;
     event_args_vt[EVENT_CONTROLLER] = (void *)event_controller;
     WrapKind *kinds[] = {&kind_user_statics, &kind_user_view, &kind_guest, &kind_controller_statics,
-                         &kind_gamepad_statics, &kind_pad_view, &kind_pad, &kind_delegate, &kind_event_args};
+                         &kind_gamepad_statics, &kind_pad_view, &kind_pad, &kind_delegate, &kind_event_args,
+                         &kind_display_info};
     for (unsigned i = 0; i < ARRAY_COUNT(kinds); ++i) {
         wrap_watch(kinds[i]);
     }

@@ -177,6 +177,26 @@ static HRESULT handler_invoke(void *self, void *sender, void *event_args) {
     return S_OK;
 }
 
+static int string_is(HSTRING string, const wchar_t *text) {
+    UINT32 length = 0;
+    const wchar_t *raw = WindowsGetStringRawBuffer(string, &length);
+    UINT32 n = 0;
+    while (text[n]) {
+        ++n;
+    }
+    for (UINT32 i = 0; i < n && i < length; ++i) {
+        if (raw[i] != text[i]) {
+            return 0;
+        }
+    }
+    return length == n;
+}
+static Fake display;
+static HRESULT user_display(FakeFace *self, void **out) {
+    (void)self;
+    *out = &display.face[0]; // as Azimuth: its own object
+    return S_OK;
+}
 static Fake handler;
 static void *handler_vt[16];
 
@@ -190,6 +210,7 @@ int main(void) {
     user_vt[6] = (void *)user_id;
     user_vt[10] = (void *)user_flag;
     user_vt[14] = user_vt[15] = (void *)user_string;
+    user_vt[9] = (void *)user_display;
     statics_vt[6] = (void *)statics_count;
     statics_vt[9] = (void *)statics_users;
     statics_vt[14] = (void *)statics_by_id;
@@ -206,6 +227,7 @@ int main(void) {
     reading_vt[7] = (void *)reading_get_buttons;
     gamepad_vt[7] = (void *)pad_reading;
     fake_init(&reading, reading_vt, NULL);
+    fake_init(&display, base_vtable, NULL);
     handler_vt[3] = (void *)handler_invoke;
     fake_init(&user, user_vt, NULL);
     fake_init(&users, list_vt, NULL);
@@ -265,6 +287,15 @@ int main(void) {
     const wchar_t *text = WindowsGetStringRawBuffer(xbox_id, &length);
     CHECK(length == 3 && text[0] == L'2' && text[1] == L'5' && text[2] == L'2');
     WindowsDeleteString(xbox_id);
+    void *info = NULL; // the guest's name, in every name slot
+    CHECK(CALL(guest, 9, HRESULT (*)(void *, void **))(guest, &info) == S_OK && info && info != &display.face[0]);
+    const int name_slots[] = {6, 8, 9};
+    for (int i = 0; i < 3; ++i) {
+        HSTRING name = NULL;
+        CHECK(CALL(info, name_slots[i], HRESULT (*)(void *, HSTRING *))(info, &name) == S_OK && string_is(name, L"Guest"));
+        WindowsDeleteString(name);
+    }
+    wrap_release(info);
     void *same = NULL;
     CHECK(CALL(guest, 0, HRESULT (*)(void *, const GUID *, void **))(guest, &IID_Other, &same) == S_OK && same == guest);
     wrap_release(same);
