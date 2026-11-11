@@ -108,6 +108,10 @@ static HRESULT pad_id(FakeFace *self, UINT64 *out) {
     return S_OK;
 }
 static HRESULT pad_user(FakeFace *self, void **out) { return statics_by_id(self, 1, out); }
+static HRESULT pad_type(FakeFace *self, HSTRING *out) {
+    (void)self;
+    return WindowsCreateString(L"Windows.Xbox.Input.Gamepad", 26, out);
+}
 static Fake reading;
 static UINT32 reading_buttons;
 static HRESULT reading_get_buttons(FakeFace *self, UINT32 *out) {
@@ -182,6 +186,7 @@ int main(void) {
     list_vt[7] = (void *)list_size;
     list_vt[9] = (void *)list_get_many;
     controller_vt[6] = (void *)pad_id;
+    controller_vt[7] = (void *)pad_type;
     controller_vt[8] = (void *)pad_user;
     pad_statics_vt[6] = (void *)pads_all;
     pad_statics_vt[7] = (void *)add_event;
@@ -298,6 +303,17 @@ int main(void) {
     reading_buttons = 0x20;
     CALL(pad_objects[1], 7, HRESULT (*)(void *, void **))(pad_objects[1], &state);
     CHECK(state == &reading.face[0]);
+    --reading.refs;
+    reading_buttons = 0x10; // A held from the start: not a press
+    CALL(pad_objects[0], 7, HRESULT (*)(void *, void **))(pad_objects[0], &state);
+    --reading.refs;
+    void *early = NULL;
+    CALL(controllers[0], 8, HRESULT (*)(void *, void **))(controllers[0], &early);
+    CALL(controllers[1], 8, HRESULT (*)(void *, void **))(controllers[1], &early);
+    CHECK(early == &user.face[0]); // nobody is player 1 yet: the second pad is still user 1's
+    user.refs -= 2;
+    reading_buttons = 0;
+    CALL(pad_objects[0], 7, HRESULT (*)(void *, void **))(pad_objects[0], &state);
     --reading.refs;
     reading_buttons = 0x10;
     CALL(pad_objects[0], 7, HRESULT (*)(void *, void **))(pad_objects[0], &state);

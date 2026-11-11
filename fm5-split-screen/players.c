@@ -17,6 +17,7 @@ enum {
     VIEW_INDEX_OF = 8,
     VIEW_GET_MANY = 9,
     CONTROLLER_ID = 6,
+    CONTROLLER_TYPE = 7,
     CONTROLLER_USER = 8,
     GAMEPAD_READING = 7, /* IGamepad::GetCurrentReading, an IGamepadReading */
     READING_BUTTONS = 7,
@@ -61,6 +62,7 @@ static WrapKind kind_delegate = {.name = "ControllerEventHandler", .primary = de
 static WrapKind kind_event_args = {.name = "ControllerEventArgs", .primary = event_args_vt};
 
 static SRWLOCK lock = SRWLOCK_INIT;
+static void *const *string_create, *const *string_buffer, *const *string_delete;
 static void *user_statics; /* Azimuth's, for the guest's own user object */
 static void *guest;        /* the guest's wrapper, kept for the whole session */
 static UINT64 pad_ids[8];  /* device ids seen, ascending */
@@ -230,7 +232,6 @@ static HRESULT guest_is_guest(WrapFace *self, unsigned char *out) {
 
 /* The game's own string functions: Azimuth emulates WinRT strings, so a string the game gets must
    come from Azimuth's functions, not from Windows' combase. */
-static void *const *string_create, *const *string_buffer, *const *string_delete;
 
 void players_strings(void *const *create, void *const *buffer, void *const *destroy) {
     string_create = create;
@@ -290,34 +291,83 @@ static HRESULT pad_user(WrapFace *self, void **out) {
     return WRAP_METHOD(self->inner, CONTROLLER_USER, GetPointerFn)(self->inner, out);
 }
 
-/* The first pad seen pressing A becomes player 1's. */
+/* Each pad's A button: a pad must be seen with A up before its press counts, so a pad that reads A
+   held from the start (a key still down, or an emulated device) never becomes player 1. */
+static struct {
+    UINT64 id;
+    int a_was_up;
+} pad_buttons[8];
+static unsigned pad_buttons_count;
+
+static void log_new_pad(void *controller, UINT64 id) {
+    WrapLine line;
+    line.length = 0;
+    line_add(&line, "PLAYERS: device id ");
+    line_add_number(&line, id);
+    line_add(&line, " reads buttons, type ");
+    void *type = NULL;
+    if (string_buffer && string_delete && *string_buffer && *string_delete &&
+        SUCCEEDED(WRAP_METHOD(controller, CONTROLLER_TYPE, GetPointerFn)(controller, &type))) {
+        UINT32 length = 0;
+        const wchar_t *text = ((const wchar_t *(*)(void *, UINT32 *))*string_buffer)(type, &length);
+        wchar_t name[64];
+        UINT32 n = 0;
+        for (; text && n < length && n < ARRAY_COUNT(name) - 1; ++n) {
+            name[n] = text[n];
+        }
+        name[n] = 0;
+        line_add_wide(&line, name);
+        ((HRESULT (*)(void *))*string_delete)(type);
+    } else {
+        line_add(&line, "unknown");
+    }
+    line_log(&line);
+}
+
 static HRESULT pad_reading(WrapFace *self, void **out) {
     wrap_note(self, GAMEPAD_READING);
     HRESULT result = WRAP_METHOD(self->inner, GAMEPAD_READING, GetPointerFn)(self->inner, out);
     UINT32 buttons = 0;
-    if (SUCCEEDED(result) && out && *out && !first_pad_known &&
-        SUCCEEDED(WRAP_METHOD(*out, READING_BUTTONS, GetU32Fn)(*out, &buttons)) && (buttons & BUTTON_A)) {
-        void *controller = NULL;
-        UINT64 id = 0;
-        if (SUCCEEDED(WRAP_METHOD(self->inner, 0, QueryFn)(self->inner, &IID_IController, &controller)) && controller) {
-            int known = SUCCEEDED(WRAP_METHOD(controller, CONTROLLER_ID, GetU64Fn)(controller, &id));
-            WRAP_METHOD(controller, 2, ULONG (*)(void *))(controller);
-            AcquireSRWLockExclusive(&lock);
-            int first = known && !first_pad_known;
-            if (first) {
-                first_pad = id;
-                first_pad_known = 1;
-            }
-            ReleaseSRWLockExclusive(&lock);
-            if (first) {
-                WrapLine line;
-                line.length = 0;
-                line_add(&line, "PLAYERS: the pad with device id ");
-                line_add_number(&line, id);
-                line_add(&line, " pressed A first: it is player 1, any other pad is the guest's");
-                line_log(&line);
-            }
+    void *controller = NULL;
+    UINT64 id = 0;
+    if (FAILED(result) || !out || !*out || first_pad_known ||
+        FAILED(WRAP_METHOD(*out, READING_BUTTONS, GetU32Fn)(*out, &buttons)) ||
+        FAILED(WRAP_METHOD(self->inner, 0, QueryFn)(self->inner, &IID_IController, &controller)) || !controller) {
+        return result;
+    }
+    int known = SUCCEEDED(WRAP_METHOD(controller, CONTROLLER_ID, GetU64Fn)(controller, &id));
+    int added = 0, first = 0;
+    AcquireSRWLockExclusive(&lock);
+    unsigned i = 0;
+    while (i < pad_buttons_count && pad_buttons[i].id != id) {
+        ++i;
+    }
+    if (known && i == pad_buttons_count && i < ARRAY_COUNT(pad_buttons)) {
+        pad_buttons[i].id = id;
+        pad_buttons[i].a_was_up = 0;
+        ++pad_buttons_count;
+        added = 1;
+    }
+    if (known && i < pad_buttons_count) {
+        if (!(buttons & BUTTON_A)) {
+            pad_buttons[i].a_was_up = 1;
+        } else if (pad_buttons[i].a_was_up && !first_pad_known) {
+            first_pad = id;
+            first_pad_known = first = 1;
         }
+    }
+    ReleaseSRWLockExclusive(&lock);
+    if (added) {
+        log_new_pad(controller, id);
+    }
+    WRAP_METHOD(controller, 2, ULONG (*)(void *))(controller);
+    if (first) {
+        WrapLine line;
+        line.length = 0;
+        line_add(&line, "PLAYERS: the pad with device id ");
+        line_add_number(&line, id);
+        line_add(&line, " pressed A first: it is player 1, any other pad is the guest's");
+        line_log(&line);
     }
     return result;
 }
