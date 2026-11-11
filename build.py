@@ -97,10 +97,21 @@ SPOTIFY_SOURCES = ["spotify-radio/spotify_mod.c", "common/mod_log.c", "spotify-r
 LINE_IN_SOURCES = ["line-in-radio/line_in_capture.c", "line-in-radio/line_in_songs.c", "line-in-radio/line_in_player.c",
                    "line-in-radio/line_in_menu.c",
                    *SPOTIFY_SOURCES]
-INCLUDE_DIRS = ["common", "sdk", "extra-options", "spotify-radio", "discord-rpc"]
+SPLITSCREEN_SOURCES = [
+    "split-screen/src/split_screen_mod.c",
+    "split-screen/src/fm5_hooks.c",
+    "split-screen/src/fm5_detour.c",
+    "split-screen/src/fm5_identity.c",
+    "split-screen/src/fm5_pairing.c",
+    "split-screen/src/fm5_systemui.c",
+    "split-screen/src/fm5_event_shield.c",
+    "split-screen/src/fm5_visibility_shield.c",
+]
+INCLUDE_DIRS = ["common", "sdk", "extra-options", "spotify-radio", "discord-rpc", "split-screen/include", "split-screen/src"]
 SPOTIFY_VERSION = "1.5.0"
 DISCORD_VERSION = "1.4.1"
 LINE_IN_VERSION = "1.1.0"
+SPLITSCREEN_VERSION = "1.0.0"
 
 
 def version_resource(compiler, directory, filename, description, product, version):
@@ -144,11 +155,12 @@ def parse_arguments():
     parser.add_argument("--discord", action="store_true", help="Build the Discord Rich Presence mod")
     parser.add_argument("--spotify", action="store_true", help="Build the Spotify radio mod")
     parser.add_argument("--line-in", action="store_true", help="Build the Line-in radio mod")
+    parser.add_argument("--splitscreen", action="store_true", help="Build the FM5 Split-Screen mod")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--build-dir", type=Path)
     arguments = parser.parse_args()
-    if sum((arguments.mod, arguments.discord, arguments.spotify, arguments.line_in)) != 1:
-        parser.error("choose one of --mod, --discord, --spotify, --line-in")
+    if sum((arguments.mod, arguments.discord, arguments.spotify, arguments.line_in, arguments.splitscreen)) != 1:
+        parser.error("choose one of --mod, --discord, --spotify, --line-in, --splitscreen")
     return arguments
 
 
@@ -195,6 +207,8 @@ def describe(options):
         return "Discord Rich Presence for Azimuth games (Azimuth Mod Loader mod)", "FH Mods Collection", DISCORD_VERSION
     if options.line_in:
         return "Line-in radio for Forza Horizon 2 (Azimuth Mod Loader mod)", "FH Mods Collection", LINE_IN_VERSION
+    if options.splitscreen:
+        return "Forza Motorsport 5 Split-Screen & Multiplayer Fix (Azimuth Mod Loader mod)", "FM5 Split-Screen", SPLITSCREEN_VERSION
     header = (SOURCE / "extra-options/shared/extra_options.h").read_text(encoding="utf-8")
     version = header.split('#define MOD_VERSION "', 1)[1].split('"', 1)[0]  # ExtraOptions' own version
     return "Forza Horizon 2, Forza Horizon 3 and Forza Motorsport 5 Extra Options by RokkuDayo (Azimuth Mod Loader mod)", "Forza Extra Options", version
@@ -209,6 +223,8 @@ def build(compiler, output, directory, options):
         sources = SPOTIFY_SOURCES
     elif options.line_in:
         sources = LINE_IN_SOURCES
+    elif options.splitscreen:
+        sources = SPLITSCREEN_SOURCES
     else:  # --mod: the loader owns Azimuth's helper ABI and finds the game
         sources = [*COMMON_SOURCES, *FM5_SOURCES, *FH3_SOURCES]
     arguments = compiler_arguments(compiler, options)
@@ -290,6 +306,7 @@ def main():
     filename = ("ExtraOptions.dll" if options.mod
                 else "DiscordRPC.dll" if options.discord
                 else "FH_LineInRadio.dll" if options.line_in
+                else "FM5_SplitScreen.dll" if options.splitscreen
                 else "FH_SpotifyRadio.dll")
     output = (options.output or SOURCE.parent / filename).resolve()
     if options.build_dir:

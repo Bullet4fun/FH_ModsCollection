@@ -9,6 +9,7 @@ Mods for the Forza titles released on the Xbox One, on Azimuth 1.0.3 or newer. T
 | [Spotify Radio](spotify-radio/README.md) | Spotify as an in-game radio station (FH2 and FH3, Spotify Premium only) |
 | [Line-in Radio](line-in-radio/README.md) | Your own music files, or any player through a virtual cable, as the in-game radio (FH2 and FH3) |
 | [Discord RPC](discord-rpc/README.md) | Discord Rich Presence, in every game Azimuth runs (FH2, F&F, FH3, FM5, FM6) |
+| [Split-Screen](split-screen/README.md) | Full 2-Player Split-Screen multiplayer & crash fix for FM5 (WinRT identity, race transition S_OK, and Visibility Thread memory buffer shields) |
 
 ## Install
 
@@ -24,6 +25,7 @@ python build.py path\to\zig.exe --mod     --output ExtraOptions.dll
 python build.py path\to\zig.exe --spotify --output FH_SpotifyRadio.dll
 python build.py path\to\zig.exe --line-in --output FH_LineInRadio.dll
 python build.py path\to\zig.exe --discord --output DiscordRPC.dll
+python build.py path\to\zig.exe --splitscreen --output FM5_SplitScreen.dll
 python tests\run.py path\to\zig.exe
 ```
 
