@@ -12,8 +12,13 @@ typedef struct WrapKind {
     volatile LONG calls[WRAP_SLOTS]; /* first member: the forwarding thunks count calls here */
     const char *name;
     void **primary;          /* vtable of the interface wrap_new is given, when the caller passes none */
-    const GUID *special_iid; /* a face reached through QueryInterface with this IID... */
-    void **special;          /* ...gets this vtable; every other face forwards each slot */
+    /* A face reached through QueryInterface with one of these IIDs gets its vtable; every other
+       face forwards each slot. */
+    const struct WrapInterface {
+        const GUID *iid;
+        void **vtable;
+    } *interfaces;
+    unsigned interface_count;
     LONG reported[WRAP_SLOTS];
 } WrapKind;
 

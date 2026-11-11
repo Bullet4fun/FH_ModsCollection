@@ -56,8 +56,12 @@ static HRESULT wrap_query(WrapFace *self, const GUID *iid, void **out) {
     }
     if (!found && wrap->face_count < WRAP_FACES) { // another interface of the same object: a new face
         found = &wrap->face[wrap->face_count];
-        found->vtable = wrap->kind->special_iid && guid_equal(iid, wrap->kind->special_iid) ? wrap->kind->special
-                                                                                            : forward_vtable;
+        found->vtable = forward_vtable;
+        for (unsigned i = 0; i < wrap->kind->interface_count; ++i) {
+            if (guid_equal(iid, wrap->kind->interfaces[i].iid)) {
+                found->vtable = wrap->kind->interfaces[i].vtable;
+            }
+        }
         found->inner = inner; // the face keeps this reference
         found->owner = wrap;
         ++wrap->face_count;

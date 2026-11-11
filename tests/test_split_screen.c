@@ -14,6 +14,7 @@ static int failures;
     } while (0)
 
 static const GUID IID_IController = {0x9776ff56, 0x9bfd, 0x4581, {0xad, 0x45, 0xb6, 0x45, 0xbb, 0xa5, 0x26, 0xd6}};
+static const GUID IID_IGamepad = {0x082e402c, 0x07df, 0x45e1, {0xa5, 0xab, 0xa3, 0x12, 0x7a, 0xf1, 0x97, 0xb5}};
 static const GUID IID_Other = {1, 2, 3, {4, 5, 6, 7, 8, 9, 10, 11}};
 
 /* A fake object with up to two interfaces (faces); face 1 answers IID_IController. */
@@ -278,6 +279,7 @@ int main(void) {
     for (UINT32 i = 0; i < 2; ++i) {
         CALL(gamepads, 6, HRESULT (*)(void *, UINT32, void **))(gamepads, i, &pad_objects[i]);
     }
+    void **gamepad_vtable = *(void ***)pad_objects[0]; // reads a gamepad's buttons
     void *controllers[2] = {0}, *owners[2] = {0};
     for (int i = 0; i < 2; ++i) {
         CHECK(pad_objects[i] != &pads[i].face[0]);
@@ -338,6 +340,10 @@ int main(void) {
     CALL(only, 8, HRESULT (*)(void *, void **))(only, &owner); // already an IController: no QueryInterface needed
     CHECK(owner == guest);
     wrap_release(owner);
+    void *gamepad = NULL; // the game's way from a controller to its readings
+    CALL(only, 0, HRESULT (*)(void *, const GUID *, void **))(only, &IID_IGamepad, &gamepad);
+    CHECK(gamepad && gamepad != only && *(void ***)gamepad == gamepad_vtable);
+    wrap_release(gamepad);
     wrap_release(only);
     wrap_release(all);
     wrap_release(guest);

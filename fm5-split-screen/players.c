@@ -32,6 +32,8 @@ enum {
 
 /* Windows.Xbox.Input.IController: Azimuth's gamepads answer it with their second vtable. */
 static const GUID IID_IController = {0x9776ff56, 0x9bfd, 0x4581, {0xad, 0x45, 0xb6, 0x45, 0xbb, 0xa5, 0x26, 0xd6}};
+/* Windows.Xbox.Input.IGamepad: their first vtable, the game's way from a controller to its readings. */
+static const GUID IID_IGamepad = {0x082e402c, 0x07df, 0x45e1, {0xa5, 0xab, 0xa3, 0x12, 0x7a, 0xf1, 0x97, 0xb5}};
 
 typedef HRESULT (*GetPointerFn)(void *, void **);
 typedef HRESULT (*QueryFn)(void *, const GUID *, void **);
@@ -53,7 +55,8 @@ static WrapKind kind_guest = {.name = "GuestUser", .primary = guest_vt};
 static WrapKind kind_controller_statics = {.name = "ControllerStatics", .primary = controller_statics_vt};
 static WrapKind kind_gamepad_statics = {.name = "GamepadStatics", .primary = gamepad_statics_vt};
 static WrapKind kind_pad_view = {.name = "Pads", .primary = pad_view_vt};
-static WrapKind kind_pad = {.name = "Pad", .primary = pad_vt, .special_iid = &IID_IController, .special = pad_controller_vt};
+static const struct WrapInterface pad_interfaces[] = {{&IID_IController, pad_controller_vt}, {&IID_IGamepad, pad_vt}};
+static WrapKind kind_pad = {.name = "Pad", .primary = pad_vt, .interfaces = pad_interfaces, .interface_count = 2};
 static WrapKind kind_delegate = {.name = "ControllerEventHandler", .primary = delegate_vt};
 static WrapKind kind_event_args = {.name = "ControllerEventArgs", .primary = event_args_vt};
 
@@ -273,6 +276,15 @@ static HRESULT pad_user(WrapFace *self, void **out) {
     UINT64 id = 0;
     if (out && SUCCEEDED(WRAP_METHOD(self->inner, CONTROLLER_ID, GetU64Fn)(self->inner, &id)) &&
         pad_index(id) >= 0 && first_pad_known && id != first_pad && (*out = guest_ref()) != NULL) {
+        static volatile LONG logged;
+        if (!InterlockedExchange(&logged, 1)) {
+            WrapLine line;
+            line.length = 0;
+            line_add(&line, "PLAYERS: the game asked whose the pad with device id ");
+            line_add_number(&line, id);
+            line_add(&line, " is: the guest's");
+            line_log(&line);
+        }
         return S_OK;
     }
     return WRAP_METHOD(self->inner, CONTROLLER_USER, GetPointerFn)(self->inner, out);
