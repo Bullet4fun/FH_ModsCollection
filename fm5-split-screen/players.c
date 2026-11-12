@@ -385,10 +385,15 @@ static void *pad_wrap(void *inner, int controller) {
     return face;
 }
 
-/* A pad that left: when it comes back it joins as the guest again. */
+/* A pad that left: when it comes back it joins as the guest again. Player 1's pad comes back with
+   another device id, so player 1 is chosen again by the next A press of a pad not the guest's. */
 static void pad_gone(UINT64 id) {
     void *wrapper = NULL;
     AcquireSRWLockExclusive(&lock);
+    int player_1 = first_pad_known && id == first_pad;
+    if (player_1) {
+        first_pad_known = 0;
+    }
     id_drop(joined, &joined_count, id);
     id_drop(waiting, &waiting_count, id);
     for (unsigned i = 0; i < pads_count; ++i) {
@@ -401,6 +406,9 @@ static void pad_gone(UINT64 id) {
     ReleaseSRWLockExclusive(&lock);
     if (wrapper) {
         wrap_release(wrapper);
+    }
+    if (player_1) {
+        log_text("PLAYERS: ", "player 1's pad left; the next pad to press A is player 1");
     }
 }
 
@@ -485,7 +493,7 @@ static HRESULT pad_reading(WrapFace *self, void **out) {
     if (known && i < pad_buttons_count) {
         if (!(buttons & BUTTON_A)) {
             pad_buttons[i].a_was_up = 1;
-        } else if (pad_buttons[i].a_was_up && !first_pad_known) {
+        } else if (pad_buttons[i].a_was_up && !first_pad_known && !id_in(joined, joined_count, id)) {
             first_pad = id;
             first_pad_known = first = 1;
             for (unsigned j = 0; j < pads_count; ++j) {

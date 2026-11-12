@@ -143,10 +143,11 @@ static HRESULT remove_event(FakeFace *self, INT64 token) {
     (void)token;
     return S_OK;
 }
+static Fake *args_pad = &pads[1]; // the pad the event is about
 static HRESULT args_controller(FakeFace *self, void **out) {
     (void)self;
-    ++pads[1].refs;
-    *out = &pads[1].face[1];
+    ++args_pad->refs;
+    *out = &args_pad->face[1];
     return S_OK;
 }
 
@@ -415,6 +416,41 @@ int main(void) {
     CHECK(handled_count == 2 && handled_user == &user.face[0]); // not joined yet
     players_tick();
     CHECK(handled_count == 4 && handled_user == guest);
+
+    // player 1's pad leaves and comes back with another device id: the next A press makes it player 1
+    args_pad = &pads[0];
+    CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    pads[0].id = 7;
+    CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
+    CHECK(handled_count == 6 && handled_user == &user.face[0]); // user 1's, not a guest waiting
+    gamepads = NULL;
+    CALL(gamepads_statics, 6, HRESULT (*)(void *, void **))(gamepads_statics, &gamepads);
+    void *back[2] = {0};
+    for (UINT32 i = 0; i < 2; ++i) {
+        CALL(gamepads, 6, HRESULT (*)(void *, UINT32, void **))(gamepads, i, &back[i]);
+    }
+    for (int i = 1; i >= 0; --i) { // the guest's pad presses A first: it stays the guest's
+        reading_buttons = 0;
+        CALL(back[i], 7, HRESULT (*)(void *, void **))(back[i], &state);
+        --reading.refs;
+        reading_buttons = 0x10;
+        CALL(back[i], 7, HRESULT (*)(void *, void **))(back[i], &state);
+        --reading.refs;
+    }
+    players_tick();
+    CHECK(handled_count == 6); // nobody joins: the pad back is player 1
+    void *back_owner = NULL;
+    void *back_controller = NULL;
+    CALL(back[0], 0, HRESULT (*)(void *, const GUID *, void **))(back[0], &IID_IController, &back_controller);
+    CALL(back_controller, 8, HRESULT (*)(void *, void **))(back_controller, &back_owner);
+    CHECK(back_owner == &user.face[0]);
+    --user.refs;
+    wrap_release(back_controller);
+    for (int i = 0; i < 2; ++i) {
+        wrap_release(back[i]);
+    }
+    wrap_release(gamepads);
+    args_pad = &pads[1];
 
     void *all = NULL;
     CALL(controllers_statics, 6, HRESULT (*)(void *, void **))(controllers_statics, &all);
