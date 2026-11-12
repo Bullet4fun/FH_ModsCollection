@@ -9,6 +9,7 @@ Mods for the Forza titles released on the Xbox One, on Azimuth 1.0.3 or newer. T
 | [Spotify Radio](spotify-radio/README.md) | Spotify as an in-game radio station (FH2 and FH3, Spotify Premium only) |
 | [Line-in Radio](line-in-radio/README.md) | Your own music files, or any player through a virtual cable, as the in-game radio (FH2 and FH3) |
 | [Discord RPC](discord-rpc/README.md) | Discord Rich Presence, in every game Azimuth runs (FH2, F&F, FH3, FM5, FM6) |
+| [FM5 Split-Screen](fm5-split-screen/README.md) | Two-player split-screen in FM5: the second pad plays as a guest with your garage |
 
 ## Install
 

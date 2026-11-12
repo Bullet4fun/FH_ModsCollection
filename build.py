@@ -104,7 +104,7 @@ INCLUDE_DIRS = ["common", "sdk", "extra-options", "spotify-radio", "discord-rpc"
 SPOTIFY_VERSION = "1.5.0"
 DISCORD_VERSION = "1.4.1"
 LINE_IN_VERSION = "1.1.0"
-SPLIT_SCREEN_VERSION = "0.1.0"
+SPLIT_SCREEN_VERSION = "1.0.0"
 
 
 def version_resource(compiler, directory, filename, description, product, version):

@@ -129,7 +129,7 @@ __declspec(dllexport) int AzimuthModLoad(const AzimuthModHost *host) {
     if (path_join(log_path, host->data_dir, L"FM5_SplitScreen.log")) {
         mod_log_open(log_path, 1, "SplitScreen");
     }
-    log_append("FM5 Split-Screen " SPLIT_SCREEN_VERSION " by Bullet4fun: https://github.com/Bullet4fun/FH_ModsCollection\r\n");
+    log_append("FM5 Split-Screen " SPLIT_SCREEN_VERSION " by Bullet4fun, based on Maiteux Zanela's research: https://github.com/Bullet4fun/FH_ModsCollection\r\n");
     factory_slot = import_slot(host->game_image, "vccorlib110.dll",
                                "?GetActivationFactoryByPCWSTR@@YAJPEAXAEAVGuid@Platform@@PEAPEAX@Z");
     if (!factory_slot) {
