@@ -16,6 +16,12 @@ Install: put `FM5_SplitScreen.dll` in the `mods` folder next to `azimuth.exe`. N
 
 Tested on Azimuth 1.0.4 with Xbox pads and a DualSense, with and without Steam.
 
+## Known issue
+
+Guest reads your garage when they join. A car you buy while Guest is already in won't show up in Guest's
+garage straight away. Fix: Guest presses B to leave and A to join again, and the car is there. You only
+hit this if you buy a car in the middle of a split-screen session.
+
 ## How it works
 
 The mod doesn't patch Azimuth or the game's code. Azimuth gives the game all its WinRT objects (users, pads,
