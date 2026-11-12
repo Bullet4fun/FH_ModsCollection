@@ -199,6 +199,15 @@ static HRESULT user_display(FakeFace *self, void **out) {
     return S_OK;
 }
 static Fake handler;
+/* Save storage statics: slot 6 records its arguments, as GetForUserAsync(user, &operation). */
+static Fake storage;
+static void *storage_user, *storage_out;
+static HRESULT storage_get(FakeFace *self, void *user_arg, void *out) {
+    (void)self;
+    storage_user = user_arg;
+    storage_out = out;
+    return S_OK;
+}
 static void *handler_vt[16];
 
 #define CALL(object, slot, type) ((type)(*(void ***)(object))[slot])
@@ -250,6 +259,12 @@ int main(void) {
     fake_init(&gamepad_statics, pad_statics_vt, NULL);
     fake_init(&args, args_vt, NULL);
     fake_init(&handler, handler_vt, NULL);
+    static void *storage_vt[16];
+    for (int i = 0; i < 16; ++i) {
+        storage_vt[i] = base_vtable[i];
+    }
+    storage_vt[6] = (void *)storage_get;
+    fake_init(&storage, storage_vt, NULL);
 
     players_init();
     static void *create = (void *)WindowsCreateString, *buffer = (void *)WindowsGetStringRawBuffer,
@@ -450,7 +465,28 @@ int main(void) {
         wrap_release(back[i]);
     }
     wrap_release(gamepads);
-    args_pad = &pads[1];
+    for (int round = 0; round < 9; ++round) { // player 1's pad comes back again and again, each time a new id
+        CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+        pads[0].id = 100 + (UINT64)round;
+        CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
+        void *view = NULL, *pad0 = NULL;
+        CALL(gamepads_statics, 6, HRESULT (*)(void *, void **))(gamepads_statics, &view);
+        CALL(view, 6, HRESULT (*)(void *, UINT32, void **))(view, 0, &pad0);
+        reading_buttons = 0;
+        CALL(pad0, 7, HRESULT (*)(void *, void **))(pad0, &state);
+        --reading.refs;
+        reading_buttons = 0x10;
+        CALL(pad0, 7, HRESULT (*)(void *, void **))(pad0, &state);
+        --reading.refs;
+        wrap_release(pad0);
+        wrap_release(view);
+    }
+    args_pad = &pads[1]; // the guest's pad replugged: it joins only if player 1 was chosen again
+    CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
+    handled_count = 0;
+    players_tick();
+    CHECK(handled_count == 2 && handled_user == guest);
 
     void *all = NULL;
     CALL(controllers_statics, 6, HRESULT (*)(void *, void **))(controllers_statics, &all);
@@ -474,6 +510,15 @@ int main(void) {
     wrap_release(added); // Azimuth's references
     wrap_release(removed);
     CHECK(handler.refs == handler_refs - 2);
+    // save storage: user 1 passes as it is, the guest goes to Azimuth as user 1, never as the wrapper
+    void *storage_statics = players_factory(L"Windows.Xbox.Storage.ConnectedStorageSpace", &iid, &storage.face[0]);
+    CHECK(storage_statics && storage_statics != &storage.face[0]);
+    int marker = 0;
+    CALL(storage_statics, 6, HRESULT (*)(void *, void *, void *))(storage_statics, &user.face[0], &marker);
+    CHECK(storage_user == &user.face[0] && storage_out == &marker);
+    CALL(storage_statics, 6, HRESULT (*)(void *, void *, void *))(storage_statics, guest, &marker);
+    CHECK(storage_user == &user.face[0] && storage_out == &marker);
+
     wrap_release(guest);
     wrap_report();
 

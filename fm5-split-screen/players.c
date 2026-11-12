@@ -54,7 +54,7 @@ typedef HRESULT (*RemoveEventFn)(void *, INT64);
 static void *user_statics_vt[WRAP_SLOTS], *user_view_vt[WRAP_SLOTS], *guest_vt[WRAP_SLOTS];
 static void *controller_statics_vt[WRAP_SLOTS], *gamepad_statics_vt[WRAP_SLOTS], *pad_view_vt[WRAP_SLOTS];
 static void *pad_vt[WRAP_SLOTS], *pad_controller_vt[WRAP_SLOTS], *delegate_vt[WRAP_SLOTS], *event_args_vt[WRAP_SLOTS];
-static void *display_info_vt[WRAP_SLOTS];
+static void *display_info_vt[WRAP_SLOTS], *storage_vt[WRAP_SLOTS];
 
 static WrapKind kind_user_statics = {.name = "UserStatics", .primary = user_statics_vt};
 static WrapKind kind_user_view = {.name = "Users", .primary = user_view_vt};
@@ -67,13 +67,12 @@ static WrapKind kind_pad = {.name = "Pad", .primary = pad_vt, .interfaces = pad_
 static WrapKind kind_delegate = {.name = "ControllerEventHandler", .primary = delegate_vt};
 static WrapKind kind_event_args = {.name = "ControllerEventArgs", .primary = event_args_vt};
 static WrapKind kind_display_info = {.name = "GuestDisplayInfo", .primary = display_info_vt};
+static WrapKind kind_storage = {.name = "ConnectedStorageSpace", .primary = storage_vt};
 
 static SRWLOCK lock = SRWLOCK_INIT;
 static void *const *string_create, *const *string_buffer, *const *string_delete;
 static void *user_statics; /* Azimuth's, for the guest's own user object */
 static void *guest;        /* the guest's wrapper, kept for the whole session */
-static UINT64 pad_ids[8];  /* device ids seen, ascending */
-static unsigned pad_count;
 static UINT64 first_pad;  /* the device that pressed A first: player 1's, all the others the guest's */
 static int first_pad_known;
 static void *controller_statics; /* the mod's wrapper: the sender of the events the mod makes */
@@ -88,6 +87,13 @@ static struct {
     void *wrapper;
 } pads[8];
 static unsigned pads_count;
+/* Each pad's A button: a pad must be seen with A up before its press counts, so a pad that reads A
+   held from the start (a key still down, or an emulated device) never becomes player 1. */
+static struct {
+    UINT64 id;
+    int a_was_up;
+} pad_buttons[8];
+static unsigned pad_buttons_count;
 /* The game's ControllerAdded and ControllerRemoved handlers (the mod's wrappers around them). */
 static struct {
     INT64 token;
@@ -151,36 +157,6 @@ static void *guest_ref(void) {
         wrap_add_ref(user);
     }
     return user;
-}
-
-/* Where a device stands among the pads seen so far, by id. */
-static int pad_index(UINT64 id) {
-    AcquireSRWLockExclusive(&lock);
-    unsigned i = 0;
-    while (i < pad_count && pad_ids[i] < id) {
-        ++i;
-    }
-    int added = 0;
-    if ((i == pad_count || pad_ids[i] != id) && pad_count < ARRAY_COUNT(pad_ids)) {
-        for (unsigned j = pad_count; j > i; --j) {
-            pad_ids[j] = pad_ids[j - 1];
-        }
-        pad_ids[i] = id;
-        ++pad_count;
-        added = 1;
-    }
-    int index = i < pad_count && pad_ids[i] == id ? (int)i : -1;
-    ReleaseSRWLockExclusive(&lock);
-    if (added) {
-        WrapLine line;
-        line.length = 0;
-        line_add(&line, "PLAYERS: pad with device id ");
-        line_add_number(&line, id);
-        line_add(&line, " seen, pads so far: ");
-        line_add_number(&line, pad_count);
-        line_log(&line);
-    }
-    return index;
 }
 
 /* User statics */
@@ -396,6 +372,12 @@ static void pad_gone(UINT64 id) {
     }
     id_drop(joined, &joined_count, id);
     id_drop(waiting, &waiting_count, id);
+    for (unsigned i = 0; i < pad_buttons_count; ++i) { // a pad back gets a new device id: keep room
+        if (pad_buttons[i].id == id) {
+            pad_buttons[i] = pad_buttons[--pad_buttons_count];
+            break;
+        }
+    }
     for (unsigned i = 0; i < pads_count; ++i) {
         if (pads[i].id == id) {
             wrapper = pads[i].wrapper;
@@ -417,7 +399,7 @@ static HRESULT pad_user(WrapFace *self, void **out) {
     wrap_note(self, CONTROLLER_USER);
     UINT64 id = 0;
     if (out && SUCCEEDED(WRAP_METHOD(self->inner, CONTROLLER_ID, GetU64Fn)(self->inner, &id)) &&
-        pad_index(id) >= 0 && first_pad_known && id != first_pad && id_in(joined, joined_count, id) &&
+        first_pad_known && id != first_pad && id_in(joined, joined_count, id) &&
         (*out = guest_ref()) != NULL) {
         static volatile LONG logged;
         if (!InterlockedExchange(&logged, 1)) {
@@ -432,14 +414,6 @@ static HRESULT pad_user(WrapFace *self, void **out) {
     }
     return WRAP_METHOD(self->inner, CONTROLLER_USER, GetPointerFn)(self->inner, out);
 }
-
-/* Each pad's A button: a pad must be seen with A up before its press counts, so a pad that reads A
-   held from the start (a key still down, or an emulated device) never becomes player 1. */
-static struct {
-    UINT64 id;
-    int a_was_up;
-} pad_buttons[8];
-static unsigned pad_buttons_count;
 
 static void log_new_pad(void *controller, UINT64 id) {
     WrapLine line;
@@ -778,6 +752,56 @@ void players_tick(void) {
     pad_args_release(args);
 }
 
+/* Save storage (ConnectedStorageSpace statics): logs which user each call is for, and never lets
+   Azimuth see the guest's wrapper, which is not its own object: the guest goes to Azimuth as user 1. */
+typedef HRESULT (*Call5Fn)(void *, void *, void *, void *, void *, void *);
+static volatile LONG storage_logged[WRAP_SLOTS];
+
+static int is_guest_face(void *arg) {
+    Wrap *own = guest ? ((WrapFace *)guest)->owner : NULL;
+    return own && (char *)arg >= (char *)&own->face[0] && (char *)arg < (char *)&own->face[WRAP_FACES];
+}
+
+/* shortcut: passes on five arguments, enough for the statics' user and out pointer; a method with
+   more stack arguments would lose them, so check the trace before overriding past slot 13. */
+static HRESULT storage_call(WrapFace *self, unsigned slot, void *a, void *b, void *c, void *d, void *e) {
+    wrap_note(self, slot);
+    void *user_1 = guest ? ((WrapFace *)guest)->inner : NULL;
+    LONG seen = 0;
+    if (is_guest_face(a)) {
+        a = user_1;
+        seen = 4;
+    } else if (is_guest_face(b)) {
+        b = user_1;
+        seen = 4;
+    } else if (a && (a == user_1 || b == user_1)) {
+        seen = 2;
+    } else {
+        seen = 1;
+    }
+    if (!(InterlockedOr(&storage_logged[slot], seen) & seen)) {
+        WrapLine line;
+        line.length = 0;
+        line_add(&line, "TRACE: save storage slot ");
+        line_add_number(&line, slot);
+        line_add(&line, seen == 4 ? " for the guest (handed on as user 1)" : seen == 2 ? " for user 1" : " without a user");
+        line_log(&line);
+    }
+    return WRAP_METHOD(self->inner, slot, Call5Fn)(self->inner, a, b, c, d, e);
+}
+#define STORAGE_SLOT(n)                                                                               \
+    static HRESULT storage_##n(WrapFace *self, void *a, void *b, void *c, void *d, void *e) {         \
+        return storage_call(self, n, a, b, c, d, e);                                                  \
+    }
+STORAGE_SLOT(6)
+STORAGE_SLOT(7)
+STORAGE_SLOT(8)
+STORAGE_SLOT(9)
+STORAGE_SLOT(10)
+STORAGE_SLOT(11)
+STORAGE_SLOT(12)
+STORAGE_SLOT(13)
+
 /* Factories */
 static struct {
     const wchar_t *name;
@@ -788,6 +812,7 @@ static struct {
     {L"Windows.Xbox.System.User", &kind_user_statics, NULL, {0}, {0}},
     {L"Windows.Xbox.Input.Controller", &kind_controller_statics, NULL, {0}, {0}},
     {L"Windows.Xbox.Input.Gamepad", &kind_gamepad_statics, NULL, {0}, {0}},
+    {L"Windows.Xbox.Storage.ConnectedStorageSpace", &kind_storage, NULL, {0}, {0}},
 };
 static UINT32 factories_logged[64];
 static unsigned factories_logged_count;
@@ -879,7 +904,7 @@ void *players_factory(const wchar_t *class_name, const GUID *iid, void *factory)
 void players_init(void) {
     wrap_init();
     void **all[] = {user_statics_vt, user_view_vt, guest_vt, controller_statics_vt, gamepad_statics_vt,
-                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt, display_info_vt};
+                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt, display_info_vt, storage_vt};
     for (unsigned i = 0; i < ARRAY_COUNT(all); ++i) {
         wrap_vtable(all[i]);
     }
@@ -893,6 +918,11 @@ void players_init(void) {
     guest_vt[USER_ID] = (void *)guest_id;
     guest_vt[USER_IS_GUEST] = (void *)guest_is_guest;
     guest_vt[USER_DISPLAY_INFO] = (void *)guest_display_info;
+    void *storage_slots[] = {(void *)storage_6,  (void *)storage_7,  (void *)storage_8,  (void *)storage_9,
+                             (void *)storage_10, (void *)storage_11, (void *)storage_12, (void *)storage_13};
+    for (unsigned i = 0; i < ARRAY_COUNT(storage_slots); ++i) {
+        storage_vt[6 + i] = storage_slots[i];
+    }
     display_info_vt[DISPLAY_NAME] = (void *)display_name_1;
     display_info_vt[DISPLAY_NAME_2] = (void *)display_name_2;
     display_info_vt[DISPLAY_NAME_3] = (void *)display_name_3;
@@ -912,7 +942,7 @@ void players_init(void) {
     event_args_vt[EVENT_CONTROLLER] = (void *)event_controller;
     WrapKind *kinds[] = {&kind_user_statics, &kind_user_view, &kind_guest, &kind_controller_statics,
                          &kind_gamepad_statics, &kind_pad_view, &kind_pad, &kind_delegate, &kind_event_args,
-                         &kind_display_info};
+                         &kind_display_info, &kind_storage};
     for (unsigned i = 0; i < ARRAY_COUNT(kinds); ++i) {
         wrap_watch(kinds[i]);
     }
