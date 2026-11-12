@@ -199,13 +199,66 @@ static HRESULT user_display(FakeFace *self, void **out) {
     return S_OK;
 }
 static Fake handler;
-/* Save storage statics: slot 6 records its arguments, as GetForUserAsync(user, &operation). */
-static Fake storage;
-static void *storage_user, *storage_out;
-static HRESULT storage_get(FakeFace *self, void *user_arg, void *out) {
+static const GUID IID_AsyncInfo = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static int marker_blobs;
+/* Save storage as Azimuth's: statics slot 6 GetForUserAsync(user, &operation), the operation (slot 6
+   put_Completed calls the handler at once, slot 8 GetResults gives the space), the space (slot 9
+   CreateContainer, slot 10 DeleteContainerAsync) and the container (slot 8 SubmitUpdatesAsync, slot
+   10 GetAsync). */
+static Fake storage, storage_op, space, container;
+static void *storage_user;
+static int submitted, deleted, read_blobs;
+static HRESULT storage_get(FakeFace *self, void *user_arg, void **out) {
     (void)self;
     storage_user = user_arg;
-    storage_out = out;
+    ++storage_op.refs;
+    *out = &storage_op.face[0];
+    return S_OK;
+}
+static HRESULT op_completed(FakeFace *self, void *handler_arg) {
+    return ((HRESULT (*)(void *, void *, int))(*(void ***)handler_arg)[3])(handler_arg, self, 1);
+}
+static HRESULT op_results(FakeFace *self, void **out) {
+    (void)self;
+    ++space.refs;
+    *out = &space.face[0];
+    return S_OK;
+}
+static HRESULT space_container(FakeFace *self, void *name, void **out) {
+    (void)self;
+    (void)name;
+    ++container.refs;
+    *out = &container.face[0];
+    return S_OK;
+}
+static HRESULT space_delete(FakeFace *self, void *name, void **out) {
+    (void)self;
+    (void)name;
+    (void)out;
+    ++deleted;
+    return S_OK;
+}
+static HRESULT container_submit(FakeFace *self, void *write, void *remove, void **out) {
+    (void)self;
+    (void)write;
+    (void)remove;
+    (void)out;
+    ++submitted;
+    return S_OK;
+}
+static HRESULT container_get(FakeFace *self, void *names, void **out) {
+    (void)self;
+    (void)names;
+    *out = NULL;
+    ++read_blobs;
+    return S_OK;
+}
+static void *completed_sender;
+static int completed_status;
+static HRESULT game_completed(void *self, void *sender, int status) {
+    (void)self;
+    completed_sender = sender;
+    completed_status = status;
     return S_OK;
 }
 static void *handler_vt[16];
@@ -265,6 +318,22 @@ int main(void) {
     }
     storage_vt[6] = (void *)storage_get;
     fake_init(&storage, storage_vt, NULL);
+    static void *op_vt[16], *space_vt[16], *container_vt[16], *completed_vt[16];
+    for (int i = 0; i < 16; ++i) {
+        op_vt[i] = space_vt[i] = container_vt[i] = completed_vt[i] = base_vtable[i];
+    }
+    op_vt[6] = (void *)op_completed;
+    op_vt[8] = (void *)op_results;
+    space_vt[9] = (void *)space_container;
+    space_vt[10] = (void *)space_delete;
+    container_vt[8] = (void *)container_submit;
+    container_vt[10] = (void *)container_get;
+    completed_vt[3] = (void *)game_completed;
+    fake_init(&storage_op, op_vt, NULL);
+    fake_init(&space, space_vt, NULL);
+    fake_init(&container, container_vt, NULL);
+    static Fake completed;
+    fake_init(&completed, completed_vt, NULL);
 
     players_init();
     static void *create = (void *)WindowsCreateString, *buffer = (void *)WindowsGetStringRawBuffer,
@@ -296,7 +365,7 @@ int main(void) {
     unsigned char is_guest = 0;
     CALL(guest, 6, HRESULT (*)(void *, UINT32 *))(guest, &id);
     CALL(guest, 10, HRESULT (*)(void *, unsigned char *))(guest, &is_guest);
-    CHECK(id == 2 && is_guest == 1);
+    CHECK(id == 2 && is_guest == 0); // signed in like user 1, so the game loads a profile for it
     HSTRING xbox_id = NULL;
     CHECK(CALL(guest, 15, HRESULT (*)(void *, HSTRING *))(guest, &xbox_id) == S_OK);
     UINT32 length = 0;
@@ -510,14 +579,53 @@ int main(void) {
     wrap_release(added); // Azimuth's references
     wrap_release(removed);
     CHECK(handler.refs == handler_refs - 2);
-    // save storage: user 1 passes as it is, the guest goes to Azimuth as user 1, never as the wrapper
+    // save storage: user 1's goes through untouched
     void *storage_statics = players_factory(L"Windows.Xbox.Storage.ConnectedStorageSpace", &iid, &storage.face[0]);
     CHECK(storage_statics && storage_statics != &storage.face[0]);
-    int marker = 0;
-    CALL(storage_statics, 6, HRESULT (*)(void *, void *, void *))(storage_statics, &user.face[0], &marker);
-    CHECK(storage_user == &user.face[0] && storage_out == &marker);
-    CALL(storage_statics, 6, HRESULT (*)(void *, void *, void *))(storage_statics, guest, &marker);
-    CHECK(storage_user == &user.face[0] && storage_out == &marker);
+    void *operation = NULL;
+    CALL(storage_statics, 6, HRESULT (*)(void *, void *, void **))(storage_statics, &user.face[0], &operation);
+    CHECK(storage_user == &user.face[0] && operation == &storage_op.face[0]);
+    --storage_op.refs;
+    // the guest's: user 1's save behind wrappers, never the guest's wrapper handed to Azimuth
+    operation = NULL;
+    CALL(storage_statics, 6, HRESULT (*)(void *, void *, void **))(storage_statics, guest, &operation);
+    CHECK(storage_user == &user.face[0] && operation && operation != &storage_op.face[0]);
+    CALL(operation, 6, HRESULT (*)(void *, void *))(operation, &completed.face[0]);
+    CHECK(completed_sender == operation && completed_status == 1); // the game's handler gets the wrapper
+    void *guest_space = NULL;
+    CHECK(CALL(operation, 8, HRESULT (*)(void *, void **))(operation, &guest_space) == S_OK && guest_space &&
+          guest_space != &space.face[0]);
+    void *guest_container = NULL;
+    CALL(guest_space, 9, HRESULT (*)(void *, void *, void **))(guest_space, NULL, &guest_container);
+    CHECK(guest_container && guest_container != &container.face[0]);
+    void *blobs = &marker_blobs;
+    CALL(guest_container, 10, HRESULT (*)(void *, void *, void **))(guest_container, NULL, &blobs);
+    CHECK(read_blobs == 1); // reads are user 1's
+    void *action = NULL;
+    CHECK(CALL(guest_container, 8, HRESULT (*)(void *, void *, void *, void **))(guest_container, NULL, NULL, &action) == S_OK);
+    CHECK(submitted == 0 && action); // the write never reaches the save
+    void *action_info = NULL;
+    CALL(action, 0, HRESULT (*)(void *, const GUID *, void **))(action, &IID_AsyncInfo, &action_info);
+    int status = 0;
+    CALL(action_info, 7, HRESULT (*)(void *, int *))(action_info, &status);
+    CHECK(status == 1 && CALL(action, 8, HRESULT (*)(void *))(action) == S_OK); // done, without an error
+    completed_sender = NULL;
+    CALL(action, 6, HRESULT (*)(void *, void *))(action, &completed.face[0]);
+    CHECK(completed_sender == action && completed_status == 1);
+    CALL(action_info, 2, ULONG (*)(void *))(action_info);
+    CALL(action, 2, ULONG (*)(void *))(action);
+    void *deleting = NULL;
+    CALL(guest_space, 10, HRESULT (*)(void *, void *, void **))(guest_space, NULL, &deleting);
+    CHECK(deleted == 0 && deleting);
+    CALL(deleting, 2, ULONG (*)(void *))(deleting);
+    CHECK(CALL(guest_container, 9, HRESULT (*)(void *))(guest_container) == E_ACCESSDENIED); // unknown: refused
+    CHECK(CALL(guest_space, 6, HRESULT (*)(void *))(guest_space) == E_ACCESSDENIED);
+    void *other = NULL;
+    CHECK(CALL(storage_statics, 7, HRESULT (*)(void *, void *, void **))(storage_statics, guest, &other) == E_ACCESSDENIED);
+    wrap_release(guest_container);
+    wrap_release(guest_space);
+    wrap_release(operation);
+    CHECK(container.refs == 1 && space.refs == 1); // the wrappers gave back what they held
 
     wrap_release(guest);
     wrap_report();

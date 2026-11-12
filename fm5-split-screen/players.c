@@ -37,6 +37,8 @@ enum {
 
 /* Windows.Xbox.Input.IController: Azimuth's gamepads answer it with their second vtable. */
 static const GUID IID_IController = {0x9776ff56, 0x9bfd, 0x4581, {0xad, 0x45, 0xb6, 0x45, 0xbb, 0xa5, 0x26, 0xd6}};
+/* Windows.Foundation.IAsyncInfo: the status side of an async operation or action. */
+static const GUID IID_IAsyncInfo = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 /* Windows.Xbox.Input.IGamepad: their first vtable, the game's way from a controller to its readings. */
 static const GUID IID_IGamepad = {0x082e402c, 0x07df, 0x45e1, {0xa5, 0xab, 0xa3, 0x12, 0x7a, 0xf1, 0x97, 0xb5}};
 
@@ -68,6 +70,13 @@ static WrapKind kind_delegate = {.name = "ControllerEventHandler", .primary = de
 static WrapKind kind_event_args = {.name = "ControllerEventArgs", .primary = event_args_vt};
 static WrapKind kind_display_info = {.name = "GuestDisplayInfo", .primary = display_info_vt};
 static WrapKind kind_storage = {.name = "ConnectedStorageSpace", .primary = storage_vt};
+/* The guest's save storage: user 1's, behind wrappers that read and never write. */
+static void *guest_op_vt[WRAP_SLOTS], *guest_handler_vt[WRAP_SLOTS], *guest_space_vt[WRAP_SLOTS],
+    *guest_container_vt[WRAP_SLOTS];
+static WrapKind kind_guest_op = {.name = "GuestStorageOperation", .primary = guest_op_vt};
+static WrapKind kind_guest_handler = {.name = "GuestStorageHandler", .primary = guest_handler_vt};
+static WrapKind kind_guest_space = {.name = "GuestStorageSpace", .primary = guest_space_vt};
+static WrapKind kind_guest_container = {.name = "GuestStorageContainer", .primary = guest_container_vt};
 
 static SRWLOCK lock = SRWLOCK_INIT;
 static void *const *string_create, *const *string_buffer, *const *string_delete;
@@ -255,7 +264,7 @@ static HRESULT guest_is_guest(WrapFace *self, unsigned char *out) {
     if (!out) {
         return E_POINTER;
     }
-    *out = 1;
+    *out = 0; // a signed-in user, not a guest: the game loads a profile for it (from user 1's save, read only)
     return S_OK;
 }
 
@@ -755,6 +764,16 @@ void players_tick(void) {
 /* Save storage (ConnectedStorageSpace statics): logs which user each call is for, and never lets
    Azimuth see the guest's wrapper, which is not its own object: the guest goes to Azimuth as user 1. */
 typedef HRESULT (*Call5Fn)(void *, void *, void *, void *, void *, void *);
+/* Slots seen live in Azimuth 1.0.4's storage while the game saved (Frida, 2026-11-12). */
+enum {
+    STORAGE_FOR_USER = 6,        /* statics: GetForUserAsync(user, &operation) */
+    OP_PUT_COMPLETED = 6,        /* IAsyncOperation: put_Completed(handler) */
+    OP_GET_RESULTS = 8,          /* IAsyncOperation: GetResults(&result) */
+    SPACE_CREATE_CONTAINER = 9,  /* space: CreateContainer(name, &container) */
+    SPACE_DELETE_CONTAINER = 10, /* space: by its place, DeleteContainerAsync(name, &action); never seen called */
+    CONTAINER_SUBMIT = 8,        /* container: SubmitUpdatesAsync(blobs, deleted, &action) */
+    CONTAINER_GET = 10,          /* container: GetAsync(names, &operation), the read */
+};
 static volatile LONG storage_logged[WRAP_SLOTS];
 
 static int is_guest_face(void *arg) {
@@ -779,16 +798,206 @@ static HRESULT storage_call(WrapFace *self, unsigned slot, void *a, void *b, voi
     } else {
         seen = 1;
     }
+    if (seen == 4 && slot != STORAGE_FOR_USER) {
+        seen = 8; // a call for the guest the mod does not know: refused, so nothing writes for it
+    }
     if (!(InterlockedOr(&storage_logged[slot], seen) & seen)) {
         WrapLine line;
         line.length = 0;
         line_add(&line, "TRACE: save storage slot ");
         line_add_number(&line, slot);
-        line_add(&line, seen == 4 ? " for the guest (handed on as user 1)" : seen == 2 ? " for user 1" : " without a user");
+        line_add(&line, seen == 8   ? " for the guest: refused"
+                        : seen == 4 ? " for the guest (user 1's save, read only)"
+                        : seen == 2 ? " for user 1"
+                                    : " without a user");
         line_log(&line);
     }
-    return WRAP_METHOD(self->inner, slot, Call5Fn)(self->inner, a, b, c, d, e);
+    if (seen == 8) {
+        return E_ACCESSDENIED;
+    }
+    HRESULT result = WRAP_METHOD(self->inner, slot, Call5Fn)(self->inner, a, b, c, d, e);
+    if (seen == 4 && SUCCEEDED(result) && b && *(void **)b) { // GetForUserAsync(user, &operation)
+        *(void **)b = wrap_new(&kind_guest_op, *(void **)b, NULL, 0);
+        return *(void **)b ? result : E_OUTOFMEMORY;
+    }
+    return result;
 }
+
+/* An async action already done, for the guest's writes: the game sees its save succeed, nothing is
+   written. Two faces: IAsyncAction at +0, IAsyncInfo at +8. */
+typedef struct {
+    void **action;
+    void **info;
+    volatile LONG refs;
+} DoneAction;
+
+static DoneAction *done_of(void *face, int info) { return (DoneAction *)((char *)face - (info ? 8 : 0)); }
+static HRESULT done_query(DoneAction *self, const GUID *iid, void **out) {
+    InterlockedIncrement(&self->refs);
+    *out = memory_equal(iid, &IID_IAsyncInfo, sizeof(GUID)) ? (void *)&self->info : (void *)self;
+    return S_OK;
+}
+static ULONG done_add_ref(DoneAction *self) { return (ULONG)InterlockedIncrement(&self->refs); }
+static ULONG done_release(DoneAction *self) {
+    LONG refs = InterlockedDecrement(&self->refs);
+    if (!refs) {
+        HeapFree(GetProcessHeap(), 0, self);
+    }
+    return (ULONG)refs;
+}
+static HRESULT done_iids(void *self, ULONG *count, GUID **iids) {
+    (void)self;
+    *count = 0;
+    *iids = NULL;
+    return S_OK;
+}
+static HRESULT done_none(void *self, void **out) { // class name: none, and trust level: base
+    (void)self;
+    *out = NULL;
+    return S_OK;
+}
+static HRESULT done_put_completed(DoneAction *self, void *handler) {
+    if (handler) { // AsyncActionCompletedHandler::Invoke(action, Completed)
+        WRAP_METHOD(handler, DELEGATE_INVOKE, HRESULT (*)(void *, void *, int))(handler, self, 1);
+    }
+    return S_OK;
+}
+static HRESULT done_get_results(DoneAction *self) {
+    (void)self;
+    return S_OK;
+}
+static HRESULT info_query(void *face, const GUID *iid, void **out) { return done_query(done_of(face, 1), iid, out); }
+static ULONG info_add_ref(void *face) { return done_add_ref(done_of(face, 1)); }
+static ULONG info_release(void *face) { return done_release(done_of(face, 1)); }
+static HRESULT info_value(void *face, UINT32 *out) { // Id 1, Status Completed (1), ErrorCode S_OK
+    (void)face;
+    *out = 1;
+    return S_OK;
+}
+static HRESULT info_error(void *face, HRESULT *out) {
+    (void)face;
+    *out = S_OK;
+    return S_OK;
+}
+static HRESULT info_nothing(void *face) { // Cancel, Close
+    (void)face;
+    return S_OK;
+}
+static void *done_action_vt[] = {(void *)done_query, (void *)done_add_ref, (void *)done_release,
+                                 (void *)done_iids,  (void *)done_none,    (void *)done_none,
+                                 (void *)done_put_completed, (void *)done_none, (void *)done_get_results};
+static void *done_info_vt[] = {(void *)info_query, (void *)info_add_ref, (void *)info_release, (void *)done_iids,
+                               (void *)done_none,  (void *)done_none,    (void *)info_value,   (void *)info_value,
+                               (void *)info_error, (void *)info_nothing, (void *)info_nothing};
+
+static HRESULT done_action(void **out) {
+    DoneAction *action = out ? HeapAlloc(GetProcessHeap(), 0, sizeof(DoneAction)) : NULL;
+    if (!action) {
+        return out ? E_OUTOFMEMORY : E_POINTER;
+    }
+    action->action = done_action_vt;
+    action->info = done_info_vt;
+    action->refs = 1;
+    *out = action;
+    return S_OK;
+}
+
+static void log_guest_storage(const char *what, unsigned slot) {
+    WrapLine line;
+    line.length = 0;
+    line_add(&line, "PLAYERS: the guest's save storage ");
+    line_add(&line, what);
+    line_add_number(&line, slot);
+    line_log(&line);
+}
+
+/* The guest's GetForUserAsync operation: its result and its completion both hand out the wrappers. */
+static HRESULT guest_op_completed(WrapFace *self, void *handler) {
+    wrap_note(self, OP_PUT_COMPLETED);
+    void *wrapped = NULL;
+    if (handler) {
+        wrap_add_ref(handler);
+        wrap_add_ref(self); // the handler passes this face to the game, so it outlives Azimuth's call
+        wrapped = wrap_new(&kind_guest_handler, handler, NULL, (uintptr_t)self);
+    }
+    HRESULT result = WRAP_METHOD(self->inner, OP_PUT_COMPLETED, AddEventFn)(self->inner, wrapped ? wrapped : handler, NULL);
+    if (wrapped) {
+        wrap_release(wrapped);
+    }
+    return result;
+}
+static HRESULT guest_op_results(WrapFace *self, void **out) {
+    wrap_note(self, OP_GET_RESULTS);
+    HRESULT result = WRAP_METHOD(self->inner, OP_GET_RESULTS, GetPointerFn)(self->inner, out);
+    if (SUCCEEDED(result) && out && *out) {
+        *out = wrap_new(&kind_guest_space, *out, NULL, 0);
+        return *out ? result : E_OUTOFMEMORY;
+    }
+    return result;
+}
+static HRESULT guest_handler_invoke(WrapFace *self, void *info, int status) {
+    wrap_note(self, DELEGATE_INVOKE);
+    (void)info; // Azimuth's own operation: the game must get the wrapper, or it reads a space that writes
+    void *op = (void *)InterlockedExchangePointer((void *volatile *)&self->owner->data, NULL);
+    HRESULT result = WRAP_METHOD(self->inner, DELEGATE_INVOKE, HRESULT (*)(void *, void *, int))(
+        self->inner, op ? op : info, status);
+    if (op) {
+        wrap_release(op);
+    }
+    return result;
+}
+
+/* The guest's space: containers come wrapped, deleting one is a no-op, anything unknown is refused. */
+static HRESULT guest_space_container(WrapFace *self, void *name, void **out) {
+    wrap_note(self, SPACE_CREATE_CONTAINER);
+    HRESULT result = WRAP_METHOD(self->inner, SPACE_CREATE_CONTAINER, HRESULT (*)(void *, void *, void **))(
+        self->inner, name, out);
+    if (SUCCEEDED(result) && out && *out) {
+        *out = wrap_new(&kind_guest_container, *out, NULL, 0);
+        return *out ? result : E_OUTOFMEMORY;
+    }
+    return result;
+}
+static HRESULT guest_space_delete(WrapFace *self, void *name, void **out) {
+    wrap_note(self, SPACE_DELETE_CONTAINER);
+    (void)name;
+    log_guest_storage("skipped deleting a container, slot ", SPACE_DELETE_CONTAINER);
+    return done_action(out);
+}
+/* The guest's container: reads go to user 1's save, a write is skipped and reported done. */
+static HRESULT guest_container_submit(WrapFace *self, void *write, void *remove, void **out) {
+    wrap_note(self, CONTAINER_SUBMIT);
+    (void)write;
+    (void)remove;
+    static volatile LONG logged;
+    if (!InterlockedExchange(&logged, 1)) {
+        log_guest_storage("skipped a save (it is user 1's), slot ", CONTAINER_SUBMIT);
+    }
+    return done_action(out);
+}
+#define GUEST_REFUSE(kind, n)                                                                         \
+    static HRESULT kind##_refuse_##n(WrapFace *self) {                                                \
+        wrap_note(self, n);                                                                           \
+        static volatile LONG logged;                                                                  \
+        if (!InterlockedExchange(&logged, 1)) {                                                       \
+            log_guest_storage(#kind ": refused unknown slot ", n);                                    \
+        }                                                                                             \
+        return E_ACCESSDENIED;                                                                        \
+    }
+GUEST_REFUSE(space, 6)
+GUEST_REFUSE(space, 7)
+GUEST_REFUSE(space, 8)
+GUEST_REFUSE(space, 13)
+GUEST_REFUSE(space, 14)
+GUEST_REFUSE(space, 15)
+GUEST_REFUSE(container, 6)
+GUEST_REFUSE(container, 7)
+GUEST_REFUSE(container, 9)
+GUEST_REFUSE(container, 11)
+GUEST_REFUSE(container, 12)
+GUEST_REFUSE(container, 13)
+GUEST_REFUSE(container, 14)
+GUEST_REFUSE(container, 15)
 #define STORAGE_SLOT(n)                                                                               \
     static HRESULT storage_##n(WrapFace *self, void *a, void *b, void *c, void *d, void *e) {         \
         return storage_call(self, n, a, b, c, d, e);                                                  \
@@ -904,7 +1113,8 @@ void *players_factory(const wchar_t *class_name, const GUID *iid, void *factory)
 void players_init(void) {
     wrap_init();
     void **all[] = {user_statics_vt, user_view_vt, guest_vt, controller_statics_vt, gamepad_statics_vt,
-                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt, display_info_vt, storage_vt};
+                    pad_view_vt, pad_vt, pad_controller_vt, delegate_vt, event_args_vt, display_info_vt, storage_vt,
+                    guest_op_vt, guest_handler_vt, guest_space_vt, guest_container_vt};
     for (unsigned i = 0; i < ARRAY_COUNT(all); ++i) {
         wrap_vtable(all[i]);
     }
@@ -923,6 +1133,26 @@ void players_init(void) {
     for (unsigned i = 0; i < ARRAY_COUNT(storage_slots); ++i) {
         storage_vt[6 + i] = storage_slots[i];
     }
+    guest_op_vt[OP_PUT_COMPLETED] = (void *)guest_op_completed;
+    guest_op_vt[OP_GET_RESULTS] = (void *)guest_op_results;
+    guest_handler_vt[DELEGATE_INVOKE] = (void *)guest_handler_invoke;
+    guest_space_vt[6] = (void *)space_refuse_6;
+    guest_space_vt[7] = (void *)space_refuse_7;
+    guest_space_vt[8] = (void *)space_refuse_8;
+    guest_space_vt[SPACE_CREATE_CONTAINER] = (void *)guest_space_container;
+    guest_space_vt[SPACE_DELETE_CONTAINER] = (void *)guest_space_delete;
+    guest_space_vt[13] = (void *)space_refuse_13;
+    guest_space_vt[14] = (void *)space_refuse_14;
+    guest_space_vt[15] = (void *)space_refuse_15;
+    guest_container_vt[6] = (void *)container_refuse_6;
+    guest_container_vt[7] = (void *)container_refuse_7;
+    guest_container_vt[CONTAINER_SUBMIT] = (void *)guest_container_submit;
+    guest_container_vt[9] = (void *)container_refuse_9;
+    guest_container_vt[11] = (void *)container_refuse_11;
+    guest_container_vt[12] = (void *)container_refuse_12;
+    guest_container_vt[13] = (void *)container_refuse_13;
+    guest_container_vt[14] = (void *)container_refuse_14;
+    guest_container_vt[15] = (void *)container_refuse_15;
     display_info_vt[DISPLAY_NAME] = (void *)display_name_1;
     display_info_vt[DISPLAY_NAME_2] = (void *)display_name_2;
     display_info_vt[DISPLAY_NAME_3] = (void *)display_name_3;
@@ -942,7 +1172,8 @@ void players_init(void) {
     event_args_vt[EVENT_CONTROLLER] = (void *)event_controller;
     WrapKind *kinds[] = {&kind_user_statics, &kind_user_view, &kind_guest, &kind_controller_statics,
                          &kind_gamepad_statics, &kind_pad_view, &kind_pad, &kind_delegate, &kind_event_args,
-                         &kind_display_info, &kind_storage};
+                         &kind_display_info, &kind_storage, &kind_guest_op,
+                         &kind_guest_handler, &kind_guest_space, &kind_guest_container};
     for (unsigned i = 0; i < ARRAY_COUNT(kinds); ++i) {
         wrap_watch(kinds[i]);
     }
