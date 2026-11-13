@@ -84,6 +84,9 @@ static void *user_statics; /* Azimuth's, for the guest's own user object */
 static void *guest;        /* the guest's wrapper, kept for the whole session */
 static UINT64 first_pad;  /* the device that pressed A first: player 1's, all the others the guest's */
 static int first_pad_known;
+/* The guest's pad, left alone when player 1's went: player 1's now, shown to the game again by players_tick. */
+static UINT64 promoted;
+static int promote_pending;
 static void *controller_statics; /* the mod's wrapper: the sender of the events the mod makes */
 static void *guest_display;      /* the guest's display info wrapper, kept for the session */
 /* Pads the guest plays with, and pads waiting to be shown to the game again as the guest's. */
@@ -394,11 +397,21 @@ static void pad_gone(UINT64 id) {
             break;
         }
     }
+    // one pad left and it is the guest's: player 1's now, as if it was plugged in again
+    int promote = player_1 && pads_count == 1 && id_in(joined, joined_count, pads[0].id);
+    if (promote) {
+        first_pad = promoted = pads[0].id;
+        first_pad_known = promote_pending = 1;
+        id_drop(joined, &joined_count, first_pad);
+        id_drop(waiting, &waiting_count, first_pad);
+    }
     ReleaseSRWLockExclusive(&lock);
     if (wrapper) {
         wrap_release(wrapper);
     }
-    if (player_1) {
+    if (promote) {
+        log_text("PLAYERS: ", "player 1's pad left; the guest's pad, the only one left, is player 1");
+    } else if (player_1) {
         log_text("PLAYERS: ", "player 1's pad left; the next pad to press A is player 1");
     }
 }
@@ -708,7 +721,43 @@ static void fire(unsigned slot, void *args) {
     }
 }
 
+/* Shows the game a pad leaving and coming back, so it asks again whose it is. Takes the wrapper's reference. */
+static void show_again(void *controller) {
+    void *face = NULL;
+    WRAP_METHOD(controller, 0, QueryFn)(controller, &IID_IController, &face);
+    wrap_release(controller);
+    PadEventArgs *args = face ? HeapAlloc(GetProcessHeap(), 0, sizeof(PadEventArgs)) : NULL;
+    if (!args) {
+        if (face) {
+            wrap_release(face);
+        }
+        return;
+    }
+    args->vtable = pad_args_vt;
+    args->refs = 1;
+    args->controller = face;
+    fire(CONTROLLER_REMOVED, args); // the game lets go of the pad...
+    fire(CONTROLLER_ADDED, args);   // ...and takes it back, asking whose it is
+    pad_args_release(args);
+}
+
 void players_tick(void) {
+    void *player_1 = NULL;
+    AcquireSRWLockExclusive(&lock);
+    if (promote_pending) {
+        promote_pending = 0;
+        for (unsigned i = 0; i < pads_count && !player_1; ++i) {
+            if (pads[i].id == promoted && first_pad_known && first_pad == promoted) { // still plugged in, still player 1
+                player_1 = pads[i].wrapper;
+                wrap_add_ref(player_1);
+            }
+        }
+    }
+    ReleaseSRWLockExclusive(&lock);
+    if (player_1) {
+        show_again(player_1);
+        return;
+    }
     UINT64 id = 0;
     AcquireSRWLockShared(&lock);
     int pending = waiting_count != 0;
@@ -740,25 +789,9 @@ void players_tick(void) {
     line_add_number(&line, id);
     line_add(&line, controller ? " joins as the guest" : " left before joining as the guest");
     line_log(&line);
-    if (!controller) {
-        return;
+    if (controller) {
+        show_again(controller); // the game lets go of the pad it gave user 1 and takes it back as the guest's
     }
-    void *face = NULL;
-    WRAP_METHOD(controller, 0, QueryFn)(controller, &IID_IController, &face);
-    wrap_release(controller);
-    PadEventArgs *args = face ? HeapAlloc(GetProcessHeap(), 0, sizeof(PadEventArgs)) : NULL;
-    if (!args) {
-        if (face) {
-            wrap_release(face);
-        }
-        return;
-    }
-    args->vtable = pad_args_vt;
-    args->refs = 1;
-    args->controller = face;
-    fire(CONTROLLER_REMOVED, args); // the game lets go of the pad it gave user 1...
-    fire(CONTROLLER_ADDED, args);   // ...and takes it back, asking whose it is
-    pad_args_release(args);
 }
 
 /* Save storage (ConnectedStorageSpace statics): logs which user each call is for, and never lets

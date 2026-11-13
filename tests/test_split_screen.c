@@ -501,43 +501,35 @@ int main(void) {
     players_tick();
     CHECK(handled_count == 4 && handled_user == guest);
 
-    // player 1's pad leaves and comes back with another device id: the next A press makes it player 1
+    // player 1's pad leaves, the guest's is the only one left: it is player 1's now, no A press needed
     args_pad = &pads[0];
     CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    handled_count = 0;
+    players_tick();
+    CHECK(handled_count == 2 && handled_user == &user.face[0]);
+    handled_count = 0;
+    players_tick();
+    CHECK(handled_count == 0); // shown again once
+    // the pad back, with another device id, joins as the guest
     pads[0].id = 7;
     CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
-    CHECK(handled_count == 6 && handled_user == &user.face[0]); // user 1's, not a guest waiting
-    gamepads = NULL;
-    CALL(gamepads_statics, 6, HRESULT (*)(void *, void **))(gamepads_statics, &gamepads);
-    void *back[2] = {0};
-    for (UINT32 i = 0; i < 2; ++i) {
-        CALL(gamepads, 6, HRESULT (*)(void *, UINT32, void **))(gamepads, i, &back[i]);
-    }
-    for (int i = 1; i >= 0; --i) { // the guest's pad presses A first: it stays the guest's
-        reading_buttons = 0;
-        CALL(back[i], 7, HRESULT (*)(void *, void **))(back[i], &state);
-        --reading.refs;
-        reading_buttons = 0x10;
-        CALL(back[i], 7, HRESULT (*)(void *, void **))(back[i], &state);
-        --reading.refs;
-    }
+    CHECK(handled_user == &user.face[0]); // not joined yet
+    handled_count = 0;
     players_tick();
-    CHECK(handled_count == 6); // nobody joins: the pad back is player 1
-    void *back_owner = NULL;
-    void *back_controller = NULL;
-    CALL(back[0], 0, HRESULT (*)(void *, const GUID *, void **))(back[0], &IID_IController, &back_controller);
-    CALL(back_controller, 8, HRESULT (*)(void *, void **))(back_controller, &back_owner);
-    CHECK(back_owner == &user.face[0]);
-    --user.refs;
-    wrap_release(back_controller);
-    for (int i = 0; i < 2; ++i) {
-        wrap_release(back[i]);
-    }
-    wrap_release(gamepads);
-    for (int round = 0; round < 9; ++round) { // player 1's pad comes back again and again, each time a new id
-        CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    CHECK(handled_count == 2 && handled_user == guest);
+
+    // both pads leave: the next A press makes the pad back player 1, each time with a new device id
+    CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    args_pad = &pads[1];
+    CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    args_pad = &pads[0];
+    for (int round = 0; round < 10; ++round) {
+        if (round) {
+            CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+        }
         pads[0].id = 100 + (UINT64)round;
         CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
+        CHECK(handled_user == &user.face[0]);
         void *view = NULL, *pad0 = NULL;
         CALL(gamepads_statics, 6, HRESULT (*)(void *, void **))(gamepads_statics, &view);
         CALL(view, 6, HRESULT (*)(void *, UINT32, void **))(view, 0, &pad0);
@@ -550,8 +542,7 @@ int main(void) {
         wrap_release(pad0);
         wrap_release(view);
     }
-    args_pad = &pads[1]; // the guest's pad replugged: it joins only if player 1 was chosen again
-    CALL(removed, 3, HRESULT (*)(void *, void *, void *))(removed, NULL, &args.face[0]);
+    args_pad = &pads[1]; // the other pad plugged in after player 1 chose: the guest's
     CALL(added, 3, HRESULT (*)(void *, void *, void *))(added, NULL, &args.face[0]);
     handled_count = 0;
     players_tick();

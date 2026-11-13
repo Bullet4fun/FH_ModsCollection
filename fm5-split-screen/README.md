@@ -8,8 +8,9 @@ Install: put `FM5_SplitScreen.dll` in the `mods` folder next to `azimuth.exe`. N
 ## How it plays
 
 - The first pad that presses A is player 1, with your profile and save. The other pad plays as Guest.
-- Unplugging a pad and plugging it back in is fine. If player 1's pad leaves, the next pad that presses A
-  becomes player 1; Guest's pad stays Guest's.
+- Unplugging a pad and plugging it back in is fine. If player 1's pad leaves and Guest's is the only pad
+  left, Guest's pad becomes player 1 straight away. With more pads left, the next pad that presses A becomes
+  player 1, and Guest's pad stays Guest's.
 - Guest can pick from your garage and from the rentals. Guest can't buy cars.
 - Your save is read only for Guest: whatever the game tries to save for Guest is dropped, so Guest can't change
   or damage your save. Guest's own progress is not kept.
